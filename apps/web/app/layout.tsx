@@ -30,10 +30,22 @@ export const metadata: Metadata = {
   },
 };
 
+const THEME_INIT_SCRIPT = `
+try {
+  if (localStorage.getItem('openvigie.theme') === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+} catch (e) {}
+`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="fr">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        {/* Runs before paint so a saved light-theme choice never flashes dark first. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {children}
+      </body>
     </html>
   );
 }

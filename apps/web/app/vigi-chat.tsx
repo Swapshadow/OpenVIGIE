@@ -17,6 +17,7 @@ type CorrelatedAsset = {
   product: string;
   version: string;
   kev: boolean;
+  verified: boolean;
   cves: string[];
   kevCves: string[];
   articles: { title: string; url: string; source: string; cves: string[] }[];
@@ -27,6 +28,8 @@ type AssetCorrelation = {
   affected: CorrelatedAsset[];
   notAffectedCount: number;
   notAffectedSample: string[];
+  unverifiedCount: number;
+  unverifiedSample: string[];
 };
 
 type ChatMessage = {
@@ -45,6 +48,9 @@ type ResolvedAsset = {
   product: string;
   version: string;
   exposure: string;
+  part: 'a' | 'o' | 'h';
+  cpeVendor: string;
+  cpeProduct: string;
 };
 
 type NdjsonEvent =
@@ -80,6 +86,12 @@ function resolveInventory(): ResolvedAsset[] {
         product: product?.name ?? asset.productId ?? '',
         version: (asset.version ?? '').slice(0, 80),
         exposure: (asset.exposure ?? '').slice(0, 80),
+        // Lets the backend rebuild the exact cache_key "Mon parc" uses, so Vigi
+        // reads the same verified NVD/CISA KEV snapshot — never a contradicting
+        // guess of its own.
+        part: product?.part ?? 'a',
+        cpeVendor: product?.cpeVendor ?? '',
+        cpeProduct: product?.cpeProduct ?? '',
       };
     });
   } catch {
@@ -351,14 +363,23 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
 
 function AssetCorrelationBanner({ correlation }: { correlation: AssetCorrelation }) {
   const kevCount = correlation.affected.filter((asset) => asset.kev).length;
+  const unverifiedNote =
+    correlation.unverifiedCount > 0 ? (
+      <span className="vigi-correlation-note">
+        {correlation.unverifiedCount} équipement{correlation.unverifiedCount > 1 ? 's' : ''} pas encore
+        vérifié{correlation.unverifiedCount > 1 ? 's' : ''} — ouvrez « Mon parc » pour lancer l’analyse.
+      </span>
+    ) : null;
+
   if (correlation.affected.length === 0) {
     return (
       <div className="vigi-correlation vigi-correlation-clear">
-        <strong>✓ Aucune correspondance</strong>
+        <strong>✓ Aucune vulnérabilité connue</strong>
         <span>
-          {correlation.totalDeclared} équipement{correlation.totalDeclared > 1 ? 's' : ''} vérifié
-          {correlation.totalDeclared > 1 ? 's' : ''} contre le bulletin des 30 derniers jours.
+          {correlation.notAffectedCount} équipement{correlation.notAffectedCount > 1 ? 's' : ''} vérifié
+          {correlation.notAffectedCount > 1 ? 's' : ''} via Mon parc, sans CVE recensée.
         </span>
+        {unverifiedNote}
       </div>
     );
   }
@@ -374,6 +395,7 @@ function AssetCorrelationBanner({ correlation }: { correlation: AssetCorrelation
         {correlation.affected.slice(0, 5).map((asset) => (
           <li key={asset.label}>
             <span className="vigi-asset-name">{asset.label || `${asset.vendor} ${asset.product}`}</span>
+            {!asset.verified ? <em className="vigi-unverified-tag">signal bulletin</em> : null}
             {asset.cves.slice(0, 3).map((cve) => (
               <code key={cve} className={asset.kevCves.includes(cve) ? 'vigi-cve vigi-cve-kev' : 'vigi-cve'}>
                 {cve}
@@ -382,6 +404,7 @@ function AssetCorrelationBanner({ correlation }: { correlation: AssetCorrelation
           </li>
         ))}
       </ul>
+      {unverifiedNote}
     </div>
   );
 }

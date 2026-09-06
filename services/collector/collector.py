@@ -1853,14 +1853,20 @@ VIGI_SYSTEM = (
     "source, d'URL, de date, d'éditeur ni de version. Quand tu cites un article, "
     "indique le nom de sa source. Les CVE et les catégories fournies sont des faits "
     "immuables : ne les minimise pas. La 'Corrélation du parc' est calculée par des "
-    "règles factuelles (correspondance produit/version et CISA KEV), jamais par toi : "
-    "elle prime toujours sur ton propre jugement. Un équipement listé dans 'affected' "
-    "est potentiellement concerné — cite ses CVE et dis s'il est dans le catalogue "
-    "CISA KEV. Un équipement absent de cette liste n'a pas de correspondance connue "
-    "dans le bulletin des 30 derniers jours : dis-le sans jamais l'exclure "
-    "définitivement, seul un avis éditeur fait foi. Si le contexte ne permet pas de "
-    "conclure, dis-le explicitement et oriente vers la bonne section d'OpenVigie (Le "
-    "Bulletin, Mon parc, Plan de veille, Recherche approfondie)."
+    "règles factuelles (jamais par toi) et prime toujours sur ton propre jugement. Un "
+    "équipement dans 'affected' avec verified=true vient de l'analyse NVD/CISA KEV "
+    "exacte déjà affichée sur la page Mon parc : affirme sans réserve qu'il est "
+    "affecté, cite ses CVE et précise s'il est dans le catalogue CISA KEV. Avec "
+    "verified=false, ce n'est qu'un signal du bulletin des 30 derniers jours, moins "
+    "fiable : formule-le avec cette réserve et invite à vérifier dans Mon parc. Un "
+    "équipement dans 'notAffectedSample' a été vérifié via Mon parc et n'a aucune CVE "
+    "connue : dis-le clairement, c'est un fait vérifié. Un équipement dans "
+    "'unverifiedSample' n'a jamais été analysé dans Mon parc et n'apparaît pas non "
+    "plus dans le bulletin : ne dis jamais qu'il n'est pas affecté, dis explicitement "
+    "que ce n'est pas encore vérifié et invite à l'ouvrir dans Mon parc. Si le "
+    "contexte ne permet pas de conclure, dis-le explicitement et oriente vers la "
+    "bonne section d'OpenVigie (Le Bulletin, Mon parc, Plan de veille, Recherche "
+    "approfondie)."
 )
 
 VIGI_CONTEXT_HINTS = (
@@ -1890,58 +1896,127 @@ def _asset_matches_text(text: str, asset: dict) -> bool:
     return bool(product) and product in text and (not vendor or vendor in text)
 
 
-def correlate_assets_with_bulletin(safe_assets: list[dict]) -> dict:
-    """Rule-based, factual check: is each declared asset mentioned in the recent
-    bulletin? This never guesses — it reuses the same product/vendor text match and
-    CISA KEV lookup as the asset-risk matrix, so Vigi's "is my parc affected"
-    answers stay grounded in facts instead of a generic, unverified guess."""
+def _asset_cache_key(asset: dict) -> str | None:
+    """Build the exact cache_key that GET/DELETE /vulnerabilities uses for this
+    asset (see inventory-workspace.tsx), so Vigi reads the identical cached
+    NVD/CISA KEV snapshot already shown on the "Mon parc" page instead of
+    forming a second, potentially contradictory opinion."""
+    vendor = asset.get("vendor", "").strip()
+    product = asset.get("product", "").strip()
+    if not vendor or not product:
+        return None
+    part = asset.get("part") or "a"
+    if part not in ("a", "o", "h"):
+        part = "a"
+    query = {
+        "vendor": vendor, "product": product, "version": asset.get("version", "").strip(),
+        "part": part,
+        "cpeVendor": asset.get("cpeVendor", "").strip(),
+        "cpeProduct": asset.get("cpeProduct", "").strip(),
+    }
+    return cache_key(query)
+
+
+def _asset_verified_snapshot(asset: dict) -> list[dict] | None:
+    """Read the cached NVD/KEV result for one asset from monitored_queries — the
+    same table "Mon parc" reads. Returns None (not an empty list) when this
+    asset has never been opened/refreshed there, so the caller can tell "known
+    clean" apart from "never checked"."""
+    key = _asset_cache_key(asset)
+    if not key:
+        return None
+    row = read_cached(key)
+    if not row or not row["payload_json"]:
+        return None
+    try:
+        payload = json.loads(row["payload_json"])
+    except json.JSONDecodeError:
+        return None
+    vulnerabilities = payload.get("vulnerabilities")
+    return vulnerabilities if isinstance(vulnerabilities, list) else None
+
+
+def correlate_assets(safe_assets: list[dict]) -> dict:
+    """Ground Vigi's "is my parc affected" answers in facts, never a guess.
+    Priority order per CLAUDE.md (rules always outrank the model):
+      1. The exact NVD/CISA KEV snapshot already computed for "Mon parc" —
+         same cache, same cache_key, so Vigi can never contradict what the
+         user just saw there.
+      2. For an asset never opened in "Mon parc" yet (no snapshot cached), a
+         weaker bulletin text-match signal, explicitly marked unverified.
+      3. Otherwise: unverified — say so, never silently claim "not affected"."""
     if not safe_assets:
-        return {"totalDeclared": 0, "affected": [], "notAffectedCount": 0, "notAffectedSample": []}
+        return {
+            "totalDeclared": 0, "affected": [], "notAffectedCount": 0,
+            "notAffectedSample": [], "unverifiedCount": 0, "unverifiedSample": [],
+        }
     try:
         kev = get_kev()
     except Exception:
         kev = {}
-    bulletin = build_bulletin("monthly", 150)
-    hits: dict[int, dict] = {}
-    for article in bulletin["articles"]:
-        cves = article["cves"]
-        if not cves:
-            # A product mention without an extracted CVE is a news item (e.g. a
-            # data breach), not "affected by a vulnerability" — skip it so
-            # "affected" stays a strictly CVE-backed, factual claim.
-            continue
-        text = normalized_search_text(f"{article['title']} {article['excerpt']}")
-        for index, asset in enumerate(safe_assets):
-            if not _asset_matches_text(text, asset):
+
+    verified: dict[int, list[dict]] = {}
+    unchecked_indexes: list[int] = []
+    for index, asset in enumerate(safe_assets):
+        snapshot = _asset_verified_snapshot(asset)
+        if snapshot is not None:
+            verified[index] = snapshot
+        else:
+            unchecked_indexes.append(index)
+
+    # Bulletin fallback only for assets "Mon parc" has not queried yet.
+    bulletin_hits: dict[int, dict] = {}
+    if unchecked_indexes:
+        bulletin = build_bulletin("monthly", 150)
+        for article in bulletin["articles"]:
+            cves = article["cves"]
+            if not cves:
                 continue
-            entry = hits.setdefault(index, {"cves": set(), "kevCves": set(), "articles": []})
-            entry["cves"].update(cves)
-            entry["kevCves"].update(cve for cve in cves if cve in kev)
-            if len(entry["articles"]) < 3:
-                entry["articles"].append({
-                    "title": article["title"], "url": article["url"],
-                    "source": article["source"]["name"], "cves": cves,
-                })
-    affected = []
-    not_affected_labels = []
+            text = normalized_search_text(f"{article['title']} {article['excerpt']}")
+            for index in unchecked_indexes:
+                if not _asset_matches_text(text, safe_assets[index]):
+                    continue
+                entry = bulletin_hits.setdefault(index, {"cves": set(), "kevCves": set(), "articles": []})
+                entry["cves"].update(cves)
+                entry["kevCves"].update(cve for cve in cves if cve in kev)
+                if len(entry["articles"]) < 3:
+                    entry["articles"].append({
+                        "title": article["title"], "url": article["url"],
+                        "source": article["source"]["name"], "cves": cves,
+                    })
+
+    affected, not_affected_labels, unverified_labels = [], [], []
     for index, asset in enumerate(safe_assets):
         label = (asset.get("label") or f"{asset.get('vendor', '')} {asset.get('product', '')}".strip())[:80]
-        entry = hits.get(index)
-        if entry:
+        if index in verified:
+            cve_ids = sorted({item.get("id", "") for item in verified[index] if item.get("id")})
+            kev_ids = sorted({item.get("id", "") for item in verified[index] if item.get("id") and item.get("kev")})
+            if cve_ids:
+                affected.append({
+                    "label": label, "vendor": asset["vendor"], "product": asset["product"],
+                    "version": asset["version"], "kev": bool(kev_ids), "verified": True,
+                    "cves": cve_ids[:8], "kevCves": kev_ids, "articles": [],
+                })
+            else:
+                not_affected_labels.append(label[:60])
+        elif index in bulletin_hits:
+            entry = bulletin_hits[index]
             affected.append({
                 "label": label, "vendor": asset["vendor"], "product": asset["product"],
-                "version": asset["version"], "kev": bool(entry["kevCves"]),
+                "version": asset["version"], "kev": bool(entry["kevCves"]), "verified": False,
                 "cves": sorted(entry["cves"])[:8], "kevCves": sorted(entry["kevCves"]),
                 "articles": entry["articles"],
             })
         else:
-            not_affected_labels.append(label[:60])
-    affected.sort(key=lambda item: (item["kev"], len(item["cves"])), reverse=True)
+            unverified_labels.append(label[:60])
+    affected.sort(key=lambda item: (item["verified"], item["kev"], len(item["cves"])), reverse=True)
     return {
         "totalDeclared": len(safe_assets),
         "affected": affected[:VIGI_CORRELATION_MAX_AFFECTED],
         "notAffectedCount": len(not_affected_labels),
         "notAffectedSample": not_affected_labels[:VIGI_CORRELATION_SAMPLE],
+        "unverifiedCount": len(unverified_labels),
+        "unverifiedSample": unverified_labels[:VIGI_CORRELATION_SAMPLE],
     }
 
 
@@ -2010,6 +2085,13 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
         if isinstance(raw, dict):
             entry = {key: clean_excerpt(str(raw.get(key, "")), 80)
                      for key in ("label", "vendor", "product", "version", "exposure")}
+            # cpeVendor/cpeProduct/part let correlate_assets rebuild the exact
+            # cache_key "Mon parc" uses, so Vigi reads the same verified NVD/KEV
+            # snapshot instead of forming its own opinion from bulletin text.
+            part = str(raw.get("part", "")).strip().lower()[:1] or "a"
+            entry["part"] = part if part in ("a", "o", "h") else "a"
+            entry["cpeVendor"] = clean_excerpt(str(raw.get("cpeVendor", "")), 80)
+            entry["cpeProduct"] = clean_excerpt(str(raw.get("cpeProduct", "")), 80)
             if entry["product"] or entry["vendor"]:
                 safe_assets.append(entry)
 
@@ -2041,10 +2123,10 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
 
     # Rule-based parc↔CVE correlation replaces sending the raw asset list: it is
     # smaller (keeps the prompt inside OLLAMA_CONTEXT_LENGTH, which speeds up
-    # inference) and it hands the model pre-computed facts instead of a blob of
-    # JSON it would otherwise have to reason over on its own — the actual source
-    # of the "générique" answers reported for the previous model.
-    asset_correlation = correlate_assets_with_bulletin(safe_assets)
+    # inference) and it hands the model pre-computed facts — preferring the
+    # exact "Mon parc" NVD/KEV snapshot — instead of a blob of JSON it would
+    # otherwise have to reason over on its own.
+    asset_correlation = correlate_assets(safe_assets)
     if safe_assets:
         for entry in asset_correlation["affected"]:
             for article in entry["articles"]:
