@@ -1848,13 +1848,19 @@ def build_ai_triage(cadence: str, limit: int, assets: list[dict]) -> dict:
 VIGI_SYSTEM = (
     "Tu es Vigi, l'assistant de veille cyber d'OpenVigie. Tu réponds en français, de "
     "façon concise et opérationnelle. Tu ne navigues pas sur le Web : tu t'appuies "
-    "uniquement sur le contexte factuel fourni (bulletin OpenVigie, parc déclaré par "
-    "l'utilisateur) et sur l'historique de la conversation. N'invente jamais de CVE, "
-    "de source, d'URL, de date, d'éditeur ni de version. Quand tu cites un article, "
+    "uniquement sur le contexte factuel fourni (bulletin OpenVigie, corrélation du "
+    "parc) et sur l'historique de la conversation. N'invente jamais de CVE, de "
+    "source, d'URL, de date, d'éditeur ni de version. Quand tu cites un article, "
     "indique le nom de sa source. Les CVE et les catégories fournies sont des faits "
-    "immuables : ne les minimise pas. Si le contexte ne permet pas de conclure, dis-le "
-    "explicitement et oriente vers la bonne section d'OpenVigie (Le Bulletin, Mon parc, "
-    "Plan de veille, Recherche approfondie)."
+    "immuables : ne les minimise pas. La 'Corrélation du parc' est calculée par des "
+    "règles factuelles (correspondance produit/version et CISA KEV), jamais par toi : "
+    "elle prime toujours sur ton propre jugement. Un équipement listé dans 'affected' "
+    "est potentiellement concerné — cite ses CVE et dis s'il est dans le catalogue "
+    "CISA KEV. Un équipement absent de cette liste n'a pas de correspondance connue "
+    "dans le bulletin des 30 derniers jours : dis-le sans jamais l'exclure "
+    "définitivement, seul un avis éditeur fait foi. Si le contexte ne permet pas de "
+    "conclure, dis-le explicitement et oriente vers la bonne section d'OpenVigie (Le "
+    "Bulletin, Mon parc, Plan de veille, Recherche approfondie)."
 )
 
 VIGI_CONTEXT_HINTS = (
@@ -1867,12 +1873,76 @@ VIGI_CONTEXT_HINTS = (
 VIGI_CACHE_TTL = 3600
 VIGI_EVIDENCE_LIMIT = 3
 VIGI_NUM_PREDICT = 200
+VIGI_CORRELATION_MAX_AFFECTED = 10
+VIGI_CORRELATION_SAMPLE = 6
 
 
 def _vigi_wants_bulletin(text: str) -> bool:
     """True when the user's question should be grounded on the live bulletin."""
     needle = normalized_search_text(text)
     return any(hint in needle for hint in VIGI_CONTEXT_HINTS)
+
+
+def _asset_matches_text(text: str, asset: dict) -> bool:
+    """Same rule as the asset-risk matrix: product (+ vendor when present) in text."""
+    vendor = normalized_search_text(asset.get("vendor", ""))
+    product = normalized_search_text(asset.get("product", ""))
+    return bool(product) and product in text and (not vendor or vendor in text)
+
+
+def correlate_assets_with_bulletin(safe_assets: list[dict]) -> dict:
+    """Rule-based, factual check: is each declared asset mentioned in the recent
+    bulletin? This never guesses — it reuses the same product/vendor text match and
+    CISA KEV lookup as the asset-risk matrix, so Vigi's "is my parc affected"
+    answers stay grounded in facts instead of a generic, unverified guess."""
+    if not safe_assets:
+        return {"totalDeclared": 0, "affected": [], "notAffectedCount": 0, "notAffectedSample": []}
+    try:
+        kev = get_kev()
+    except Exception:
+        kev = {}
+    bulletin = build_bulletin("monthly", 150)
+    hits: dict[int, dict] = {}
+    for article in bulletin["articles"]:
+        cves = article["cves"]
+        if not cves:
+            # A product mention without an extracted CVE is a news item (e.g. a
+            # data breach), not "affected by a vulnerability" — skip it so
+            # "affected" stays a strictly CVE-backed, factual claim.
+            continue
+        text = normalized_search_text(f"{article['title']} {article['excerpt']}")
+        for index, asset in enumerate(safe_assets):
+            if not _asset_matches_text(text, asset):
+                continue
+            entry = hits.setdefault(index, {"cves": set(), "kevCves": set(), "articles": []})
+            entry["cves"].update(cves)
+            entry["kevCves"].update(cve for cve in cves if cve in kev)
+            if len(entry["articles"]) < 3:
+                entry["articles"].append({
+                    "title": article["title"], "url": article["url"],
+                    "source": article["source"]["name"], "cves": cves,
+                })
+    affected = []
+    not_affected_labels = []
+    for index, asset in enumerate(safe_assets):
+        label = (asset.get("label") or f"{asset.get('vendor', '')} {asset.get('product', '')}".strip())[:80]
+        entry = hits.get(index)
+        if entry:
+            affected.append({
+                "label": label, "vendor": asset["vendor"], "product": asset["product"],
+                "version": asset["version"], "kev": bool(entry["kevCves"]),
+                "cves": sorted(entry["cves"])[:8], "kevCves": sorted(entry["kevCves"]),
+                "articles": entry["articles"],
+            })
+        else:
+            not_affected_labels.append(label[:60])
+    affected.sort(key=lambda item: (item["kev"], len(item["cves"])), reverse=True)
+    return {
+        "totalDeclared": len(safe_assets),
+        "affected": affected[:VIGI_CORRELATION_MAX_AFFECTED],
+        "notAffectedCount": len(not_affected_labels),
+        "notAffectedSample": not_affected_labels[:VIGI_CORRELATION_SAMPLE],
+    }
 
 
 def _vigi_cache_key(question: str, assets: list[dict], cadence: str) -> str:
@@ -1916,8 +1986,11 @@ def write_vigi_cache(key: str, payload: dict) -> None:
         )
 
 
-def build_vigi_reply(messages: list[dict], assets: list[dict], cadence: str = "daily") -> dict:
-    """Vigi chatbot: grounded local answers over the OpenVigie bulletin and parc."""
+def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "daily"):
+    """Validate the request and assemble the grounded prompt for Vigi. Raises
+    ValueError on bad input — call this before sending any HTTP response headers,
+    since the actual model call is streamed and can no longer change the status
+    code once it starts."""
     if cadence not in ("today", "daily", "weekly", "monthly"):
         cadence = "daily"
     history: list[dict] = []
@@ -1941,9 +2014,6 @@ def build_vigi_reply(messages: list[dict], assets: list[dict], cadence: str = "d
                 safe_assets.append(entry)
 
     cache_key = _vigi_cache_key(last_user, safe_assets, cadence)
-    cached = read_vigi_cache(cache_key)
-    if cached is not None:
-        return {**cached, "cached": True}
 
     context_blocks: list[str] = []
     used_sources: list[dict] = []
@@ -1968,10 +2038,20 @@ def build_vigi_reply(messages: list[dict], assets: list[dict], cadence: str = "d
                 f"Bulletin OpenVigie ({cadence}), articles attribués les plus récents :\n"
                 + json.dumps(evidence, ensure_ascii=False)
             )
+
+    # Rule-based parc↔CVE correlation replaces sending the raw asset list: it is
+    # smaller (keeps the prompt inside OLLAMA_CONTEXT_LENGTH, which speeds up
+    # inference) and it hands the model pre-computed facts instead of a blob of
+    # JSON it would otherwise have to reason over on its own — the actual source
+    # of the "générique" answers reported for the previous model.
+    asset_correlation = correlate_assets_with_bulletin(safe_assets)
     if safe_assets:
+        for entry in asset_correlation["affected"]:
+            for article in entry["articles"]:
+                used_sources.append({"name": article["source"], "url": article["url"]})
         context_blocks.append(
-            "Parc déclaré par l'utilisateur (marque, produit, version) :\n"
-            + json.dumps(safe_assets, ensure_ascii=False)
+            "Corrélation du parc (règles factuelles + CISA KEV, priment sur ton jugement) :\n"
+            + json.dumps(asset_correlation, ensure_ascii=False)
         )
 
     system = VIGI_SYSTEM
@@ -1984,49 +2064,89 @@ def build_vigi_reply(messages: list[dict], assets: list[dict], cadence: str = "d
             "ou sur son parc."
         )
 
-    request_body = json.dumps({
+    request_body = {
         "model": OLLAMA_MODEL,
-        "stream": False,
+        "stream": True,
         "messages": [{"role": "system", "content": system}, *history],
         "options": {"temperature": 0.2, "num_predict": VIGI_NUM_PREDICT},
         "keep_alive": "30m",
-    }, ensure_ascii=False).encode()
-    request = urllib.request.Request(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        data=request_body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=240) as response:
-            result = json.loads(response.read())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Vigi (IA locale) indisponible : {error}") from error
-    reply = result.get("message", {}).get("content", "").strip()
-    if not reply:
-        raise RuntimeError("Vigi a retourné une réponse vide")
-
+    }
     seen: set[str] = set()
     sources = []
     for item in used_sources:
         if item["url"] and item["url"] not in seen:
             seen.add(item["url"])
             sources.append(item)
-    payload = {
+    used_context = {
+        "bulletin": used_bulletin,
+        "cadence": cadence if used_bulletin else None,
+        "assets": len(safe_assets),
+        "assetsAffected": len(asset_correlation["affected"]),
+    }
+    return cache_key, request_body, sources, used_context, asset_correlation
+
+
+def stream_vigi_tokens(cache_key: str, request_body: dict, sources: list[dict],
+                        used_context: dict, asset_correlation: dict):
+    """Yield NDJSON events for POST /ai/chat: one 'meta' line (parc correlation +
+    sources, so the UI can show it immediately), then 'token' deltas as Mistral
+    generates them, then a closing 'done' or 'error' line. Streaming turns a
+    silent 10-20s wait into text appearing within ~1-2s."""
+    yield json.dumps({
+        "type": "meta", "model": OLLAMA_MODEL, "usedContext": used_context,
+        "sources": sources, "assetCorrelation": asset_correlation,
+    }, ensure_ascii=False) + "\n"
+
+    cached = read_vigi_cache(cache_key)
+    if cached is not None:
+        yield json.dumps({"type": "token", "text": cached.get("reply", "")}, ensure_ascii=False) + "\n"
+        yield json.dumps({"type": "done", "cached": True}, ensure_ascii=False) + "\n"
+        return
+
+    request = urllib.request.Request(
+        f"{OLLAMA_BASE_URL}/api/chat",
+        data=json.dumps(request_body, ensure_ascii=False).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    full_text: list[str] = []
+    try:
+        with urllib.request.urlopen(request, timeout=240) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8").strip()
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("message", {}).get("content", "")
+                if delta:
+                    full_text.append(delta)
+                    yield json.dumps({"type": "token", "text": delta}, ensure_ascii=False) + "\n"
+                if chunk.get("done"):
+                    break
+    except (urllib.error.URLError, TimeoutError) as error:
+        yield json.dumps(
+            {"type": "error", "message": f"Vigi (IA locale) indisponible : {error}"}, ensure_ascii=False,
+        ) + "\n"
+        return
+
+    reply = "".join(full_text).strip()
+    if not reply:
+        yield json.dumps({"type": "error", "message": "Vigi a retourné une réponse vide"}, ensure_ascii=False) + "\n"
+        return
+
+    write_vigi_cache(cache_key, {
         "generatedAt": iso_timestamp(int(time.time())),
         "model": OLLAMA_MODEL,
         "reply": reply,
-        "usedContext": {
-            "bulletin": used_bulletin,
-            "cadence": cadence if used_bulletin else None,
-            "assets": len(safe_assets),
-            "articles": len(used_sources),
-        },
+        "usedContext": used_context,
         "sources": sources,
+        "assetCorrelation": asset_correlation,
         "notice": "Réponse IA locale fondée uniquement sur le bulletin et le parc fournis.",
-    }
-    write_vigi_cache(cache_key, payload)
-    return {**payload, "cached": False}
+    })
+    yield json.dumps({"type": "done", "cached": False}, ensure_ascii=False) + "\n"
 
 
 def search_articles(query: str, limit: int = 30, days: int = 365, source_id: str = "", sort: str = "recent") -> dict:
@@ -2723,14 +2843,29 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(assets, list):
                     raise ValueError("assets doit être une liste")
                 cadence = str(payload.get("cadence", "daily"))
-                self.send_json(200, build_vigi_reply(messages, assets, cadence))
+                prepared = _vigi_prepare(messages, assets, cadence)
             except (ValueError, json.JSONDecodeError) as error:
                 self.send_json(400, {"error": str(error)})
-            except RuntimeError as error:
-                self.send_json(503, {"error": str(error)})
+                return
             except Exception as error:
-                print(f"Vigi chat error: {error}", flush=True)
+                print(f"Vigi chat prep error: {error}", flush=True)
                 self.send_json(500, {"error": "Erreur interne de Vigi"})
+                return
+            # Streaming below: the status code and headers are committed here, so
+            # any failure past this point can only be reported as an in-band
+            # {"type":"error"} NDJSON line, never as an HTTP error status.
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                for line in stream_vigi_tokens(*prepared):
+                    self.wfile.write(line.encode("utf-8"))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as error:
+                print(f"Vigi chat stream error: {error}", flush=True)
             return
         if path == "/ai/triage":
             try:

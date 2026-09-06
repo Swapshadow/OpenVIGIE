@@ -11,11 +11,31 @@ type ChatRole = 'user' | 'assistant';
 
 type ChatSource = { name: string; url: string };
 
+type CorrelatedAsset = {
+  label: string;
+  vendor: string;
+  product: string;
+  version: string;
+  kev: boolean;
+  cves: string[];
+  kevCves: string[];
+  articles: { title: string; url: string; source: string; cves: string[] }[];
+};
+
+type AssetCorrelation = {
+  totalDeclared: number;
+  affected: CorrelatedAsset[];
+  notAffectedCount: number;
+  notAffectedSample: string[];
+};
+
 type ChatMessage = {
   role: ChatRole;
   content: string;
   sources?: ChatSource[];
-  usedContext?: { bulletin: boolean; cadence: Cadence | null; assets: number };
+  usedContext?: { bulletin: boolean; cadence: Cadence | null; assets: number; assetsAffected?: number };
+  assetCorrelation?: AssetCorrelation;
+  streaming?: boolean;
   error?: boolean;
 };
 
@@ -27,16 +47,22 @@ type ResolvedAsset = {
   exposure: string;
 };
 
+type NdjsonEvent =
+  | { type: 'meta'; model: string; usedContext: ChatMessage['usedContext']; sources: ChatSource[]; assetCorrelation: AssetCorrelation }
+  | { type: 'token'; text: string }
+  | { type: 'done'; cached?: boolean }
+  | { type: 'error'; message: string };
+
 const SUGGESTIONS = [
   'Quelles sont les vulnérabilités majeures du bulletin du jour ?',
-  'Y a-t-il une alerte qui concerne mon parc ?',
+  'Un de mes équipements est-il affecté ?',
   'Résume les menaces à surveiller cette semaine.',
 ];
 
 const WELCOME =
   "Bonjour, je suis Vigi, l'assistant d'OpenVigie. Je réponds à partir du bulletin " +
-  'attribué et de votre parc déclaré — je n’invente rien et je cite mes sources. ' +
-  'Posez-moi une question sur les vulnérabilités ou les menaces suivies.';
+  'attribué et je vérifie votre parc contre les CVE et le catalogue CISA KEV par des ' +
+  'règles factuelles — je n’invente rien et je cite mes sources.';
 
 function resolveInventory(): ResolvedAsset[] {
   if (typeof window === 'undefined') return [];
@@ -61,9 +87,28 @@ function resolveInventory(): ResolvedAsset[] {
   }
 }
 
+/** Parses one or more complete NDJSON lines out of a growing text buffer,
+ * returning the parsed events and the leftover (possibly partial) tail. */
+function drainNdjson(buffer: string): { events: NdjsonEvent[]; rest: string } {
+  const lines = buffer.split('\n');
+  const rest = lines.pop() ?? '';
+  const events: NdjsonEvent[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      events.push(JSON.parse(trimmed) as NdjsonEvent);
+    } catch {
+      // Ignore a malformed line rather than breaking the whole stream.
+    }
+  }
+  return { events, rest };
+}
+
 export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: Cadence }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const [phase, setPhase] = useState<'idle' | 'checking' | 'streaming'>('idle');
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: WELCOME }]);
   const threadRef = useRef<HTMLDivElement>(null);
@@ -86,12 +131,22 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
 
       const assets = resolveInventory();
       const history = [...messages, { role: 'user' as ChatRole, content: question }];
-      setMessages(history);
+      setMessages([...history, { role: 'assistant', content: '', streaming: true }]);
       setDraft('');
       setPending(true);
+      setPhase('checking');
 
       const controller = new AbortController();
       abortRef.current = controller;
+
+      const setAssistant = (updater: (message: ChatMessage) => ChatMessage) => {
+        setMessages((current) => {
+          const next = [...current];
+          const lastIndex = next.length - 1;
+          next[lastIndex] = updater(next[lastIndex]);
+          return next;
+        });
+      };
 
       try {
         const response = await fetch('/api/ai/chat', {
@@ -108,34 +163,59 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
               .map((entry) => ({ role: entry.role, content: entry.content })),
           }),
         });
-        const payload = await response.json();
-        if (!response.ok) {
+
+        if (!response.ok || !response.body) {
+          const payload = await response.json().catch(() => ({}));
           throw new Error(payload?.error ?? `Erreur ${response.status}`);
         }
-        setMessages((current) => [
-          ...current,
-          {
-            role: 'assistant',
-            content: String(payload.reply ?? '').trim() || 'Vigi n’a pas renvoyé de réponse.',
-            sources: Array.isArray(payload.sources) ? payload.sources.slice(0, 8) : [],
-            usedContext: payload.usedContext,
-          },
-        ]);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let sawError: string | null = null;
+
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const { events, rest } = drainNdjson(buffer);
+          buffer = rest;
+          for (const event of events) {
+            if (event.type === 'meta') {
+              setAssistant((message) => ({
+                ...message,
+                sources: event.sources.slice(0, 8),
+                usedContext: event.usedContext,
+                assetCorrelation: event.assetCorrelation,
+              }));
+              setPhase('streaming');
+            } else if (event.type === 'token') {
+              setAssistant((message) => ({ ...message, content: message.content + event.text }));
+            } else if (event.type === 'error') {
+              sawError = event.message;
+            }
+          }
+        }
+
+        if (sawError) throw new Error(sawError);
+        setAssistant((message) => ({
+          ...message,
+          streaming: false,
+          content: message.content.trim() || 'Vigi n’a pas renvoyé de réponse.',
+        }));
       } catch (error) {
         if (controller.signal.aborted) return;
         const detail = error instanceof Error ? error.message : 'Service indisponible.';
-        setMessages((current) => [
-          ...current,
-          {
-            role: 'assistant',
-            error: true,
-            content:
-              `Vigi est indisponible (${detail}). L’inférence locale peut être lente au ` +
-              'premier appel : réessayez dans quelques instants.',
-          },
-        ]);
+        setAssistant(() => ({
+          role: 'assistant',
+          error: true,
+          content:
+            `Vigi est indisponible (${detail}). L’inférence locale peut être lente au ` +
+            'premier appel : réessayez dans quelques instants.',
+        }));
       } finally {
         setPending(false);
+        setPhase('idle');
         abortRef.current = null;
       }
     },
@@ -151,30 +231,42 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
         aria-label={open ? 'Fermer Vigi' : 'Ouvrir Vigi, l’assistant OpenVigie'}
         onClick={() => setOpen((value) => !value)}
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          {open ? (
-            <path d="m6 6 12 12M18 6 6 18" />
-          ) : (
-            <>
-              <circle cx="12" cy="12" r="8" />
-              <circle cx="12" cy="12" r="3.4" />
-              <path d="M12 12 18.4 5.6" />
-            </>
-          )}
-        </svg>
+        <span className="vigi-fab-orb" aria-hidden="true">
+          <span className="vigi-fab-ring" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+            {open ? (
+              <path d="m6 6 12 12M18 6 6 18" />
+            ) : (
+              <>
+                <circle cx="12" cy="12" r="7.2" />
+                <circle cx="12" cy="12" r="2.4" />
+                <path d="M12 4.8V2.6M12 21.4v-2.2M19.2 12h2.2M2.6 12h2.2" />
+              </>
+            )}
+          </svg>
+        </span>
         <span>Vigi</span>
       </button>
 
       {open ? (
         <section className="vigi-panel glass-panel" aria-label="Vigi, assistant IA local d’OpenVigie">
+          <div className="vigi-panel-glow" aria-hidden="true" />
           <header className="vigi-head">
-            <div>
-              <strong>Vigi</strong>
-              <span>Assistant IA local · bulletin + parc</span>
+            <div className="vigi-head-row">
+              <span className="vigi-avatar" data-active={pending}>
+                <span className="vigi-avatar-pulse" />
+              </span>
+              <div>
+                <strong>Vigi</strong>
+                <span>IA locale · Mistral 7B Instruct · corrélation parc en temps réel</span>
+              </div>
+              <span className="vigi-status" data-state={pending ? phase : 'ready'}>
+                {pending ? (phase === 'checking' ? 'Analyse…' : 'Réponse…') : 'Prêt'}
+              </span>
             </div>
             <p className="vigi-scope">
               {assetCount > 0
-                ? `${assetCount} équipement${assetCount > 1 ? 's' : ''} du parc pris en compte`
+                ? `${assetCount} équipement${assetCount > 1 ? 's' : ''} du parc surveillé${assetCount > 1 ? 's' : ''}`
                 : 'Aucun équipement déclaré dans « Mon parc »'}
             </p>
           </header>
@@ -185,7 +277,13 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
                 key={index}
                 className={`vigi-msg vigi-msg-${message.role}${message.error ? ' vigi-msg-error' : ''}`}
               >
-                <p>{message.content}</p>
+                {message.assetCorrelation && message.assetCorrelation.totalDeclared > 0 ? (
+                  <AssetCorrelationBanner correlation={message.assetCorrelation} />
+                ) : null}
+                <p>
+                  {message.content}
+                  {message.streaming ? <span className="vigi-caret" aria-hidden="true" /> : null}
+                </p>
                 {message.usedContext?.bulletin ? (
                   <span className="vigi-context">Fondé sur le bulletin {message.usedContext.cadence}</span>
                 ) : null}
@@ -202,9 +300,10 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
                 ) : null}
               </article>
             ))}
-            {pending ? (
+            {phase === 'checking' ? (
               <article className="vigi-msg vigi-msg-assistant vigi-msg-pending">
-                <p>Vigi consulte le bulletin et rédige une réponse locale…</p>
+                <span className="vigi-scan" aria-hidden="true" />
+                <p>Corrélation du parc avec le bulletin et CISA KEV…</p>
               </article>
             ) : null}
           </div>
@@ -241,11 +340,48 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
               aria-label="Message pour Vigi"
             />
             <button type="submit" disabled={pending || !draft.trim()}>
-              {pending ? '…' : 'Envoyer'}
+              {pending ? <span className="vigi-caret vigi-caret-btn" aria-hidden="true" /> : 'Envoyer'}
             </button>
           </form>
         </section>
       ) : null}
     </>
+  );
+}
+
+function AssetCorrelationBanner({ correlation }: { correlation: AssetCorrelation }) {
+  const kevCount = correlation.affected.filter((asset) => asset.kev).length;
+  if (correlation.affected.length === 0) {
+    return (
+      <div className="vigi-correlation vigi-correlation-clear">
+        <strong>✓ Aucune correspondance</strong>
+        <span>
+          {correlation.totalDeclared} équipement{correlation.totalDeclared > 1 ? 's' : ''} vérifié
+          {correlation.totalDeclared > 1 ? 's' : ''} contre le bulletin des 30 derniers jours.
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className={`vigi-correlation${kevCount > 0 ? ' vigi-correlation-kev' : ' vigi-correlation-warn'}`}>
+      <strong>
+        {kevCount > 0 ? '⚠ ' : '● '}
+        {correlation.affected.length} équipement{correlation.affected.length > 1 ? 's' : ''} potentiellement
+        affecté{correlation.affected.length > 1 ? 's' : ''}
+        {kevCount > 0 ? ` · ${kevCount} en exploitation active (CISA KEV)` : ''}
+      </strong>
+      <ul>
+        {correlation.affected.slice(0, 5).map((asset) => (
+          <li key={asset.label}>
+            <span className="vigi-asset-name">{asset.label || `${asset.vendor} ${asset.product}`}</span>
+            {asset.cves.slice(0, 3).map((cve) => (
+              <code key={cve} className={asset.kevCves.includes(cve) ? 'vigi-cve vigi-cve-kev' : 'vigi-cve'}>
+                {cve}
+              </code>
+            ))}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
