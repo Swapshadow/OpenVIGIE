@@ -29,7 +29,8 @@ CISA_KEV_API = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_v
 REFRESH_SECONDS = max(300, int(os.environ.get("OPENVIGIE_REFRESH_SECONDS", "86400")))
 FEED_REFRESH_SECONDS = max(1800, int(os.environ.get("OPENVIGIE_FEED_REFRESH_SECONDS", "10800")))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct")
+# Mistral 7B Instruct: ~4.1 GB, meilleur français, recommandé.
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "mistral:7b-instruct")
 HTTP_TIMEOUT = 25
 MAX_RESULTS = 100
 MAX_FEED_BYTES = 2_000_000

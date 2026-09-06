@@ -1,6 +1,6 @@
 # OpenVigie — Déploiement Cross-Platform
 
-OpenVigie est une plateforme de **veille cybersécurité** avec IA locale (Qwen2.5). Deploy en 1 commande sur **Windows, macOS ou Linux**.
+OpenVigie est une plateforme de **veille cybersécurité** avec IA locale (Mistral 7B Instruct — ~4.1 GB, meilleur français, recommandé). Deploy en 1 commande sur **Windows, macOS ou Linux**.
 
 ## 🚀 Démarrage Rapide
 
@@ -9,7 +9,7 @@ OpenVigie est une plateforme de **veille cybersécurité** avec IA locale (Qwen2
   - [Windows](https://docs.docker.com/desktop/install/windows-install/)
   - [macOS](https://docs.docker.com/desktop/install/mac-install/)
   - [Linux](https://docs.docker.com/engine/install/)
-- **8 GB de RAM minimum** pour Qwen2.5
+- **8 GB de RAM minimum** pour Mistral 7B Instruct
 - **5 GB d'espace disque** pour les images
 
 ### Lancer le projet (Tous les OS)
@@ -68,7 +68,7 @@ docker compose -f docker-compose.prod.yml down
 
 - **Web** (Next.js) → http://localhost:3000
 - **Collector** (Python) → http://localhost:8787
-- **Ollama** (Qwen2.5 3b) → http://localhost:11434
+- **Ollama** (Mistral 7B Instruct) → http://localhost:11434
 
 ## 🆘 Problèmes courants
 
@@ -103,4 +103,4 @@ docker pull swapshadow/openvigie-collector:latest
 
 ---
 
-**Version**: 1.0.0 | **Modèle IA**: Qwen2.5 3b-instruct (local)
+**Version**: 1.0.0 | **Modèle IA**: Mistral 7B Instruct (local)

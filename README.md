@@ -26,7 +26,7 @@ docker compose up -d
 Then open **[http://localhost:3000](http://localhost:3000)** in your browser.
 
 **Requirements:** Docker Desktop installed. 8 GB RAM recommended for the Vigi AI
-assistant (Qwen2.5 3B runs locally in Docker).
+assistant (Mistral 7B Instruct runs locally in Docker).
 
 ## Product principles
 
@@ -51,8 +51,8 @@ vulnerabilities, refreshed every three hours from 44+ specialist RSS/Atom source
 
 - **Article images** — cover images are extracted from feed enclosures, Media RSS
   metadata, or article HTML and displayed as lazy-loaded thumbnails in the feed.
-- **Vigi — local AI assistant** — a chatbot powered by Qwen2.5 3B (100% local,
-  runs in Docker) that answers questions about the bulletin and your asset
+- **Vigi — local AI assistant** — a chatbot powered by Mistral 7B Instruct
+  (~4.1 GB, meilleur français, recommandé; 100% local, runs in Docker) that answers questions about the bulletin and your asset
   inventory. Vigi correlates CVEs, exploitation status, and remediation guidance
   without sending data to external AI services.
 - **Weekly report** (`/rapport-hebdo`) — synthesizes the past 7 days with:
@@ -166,7 +166,7 @@ Then open `http://localhost:3000`. Stop the application with `Ctrl+C`, or run
 
 ### Local AI with Vigi (Ollama)
 
-The Docker stack includes Ollama and Qwen2.5 3B Instruct. No host installation
+The Docker stack includes Ollama and Mistral 7B Instruct. No host installation
 is required on Windows, Linux, or macOS. Start the complete stack normally:
 
 ```bash
@@ -179,14 +179,14 @@ only on the host loopback interface at `http://localhost:11434` and is available
 to the web app at `http://ollama:11434`. To select another model or host port,
 set `OLLAMA_MODEL` or `OLLAMA_PORT` in `.env`.
 
-**Memory requirements:** Qwen2.5 3B needs at least 4 GB of memory, with 6–8 GB
-recommended for responsive performance on personal computers. OpenVigie defaults
+**Memory requirements:** Mistral 7B Instruct needs at least 6 GB of memory, with
+8 GB recommended for responsive performance on personal computers. OpenVigie defaults
 to a 2048-token context and one parallel inference to keep resource usage
 predictable.
 
 **How Vigi works:** Ollama does not browse the web. The OpenVigie collector
 fetches attributed RSS/Atom news and primary security sources, then Vigi
-(Qwen2.5 3B) analyzes and answers questions about those items locally, without
+(Mistral 7B Instruct) analyzes and answers questions about those items locally, without
 sending data to cloud AI services. Vigi can cross-reference the bulletin with
 your declared asset inventory to identify relevant vulnerabilities.
 

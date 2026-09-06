@@ -1,4 +1,4 @@
-# OpenVigie - Contexte du projet et directive Qwen2.5
+# OpenVigie - Contexte du projet et directive Mistral
 
 Ce fichier fournit à Claude le contexte nécessaire pour intervenir sur OpenVigie.
 Il doit être lu avant toute modification du projet, en particulier avant une
@@ -35,7 +35,7 @@ Collecteur et normalisation
         ↓
 Règles factuelles CVE / versions / parc / CISA KEV
         ↓
-Analyse locale par Qwen2.5
+Analyse locale par Mistral
         ↓
 Bulletin / matrice du parc / alertes
 ```
@@ -54,15 +54,17 @@ Le bulletin constitue actuellement la vue automatique des dernières nouvelles
 cyber. L'IA locale doit progressivement contribuer à sa déduplication, son
 classement, ses résumés et sa mise à jour éditoriale assistée.
 
-## Rôle de Qwen2.5
+## Rôle de Mistral
 
 Le modèle de référence est :
 
 ```text
-qwen2.5:7b-instruct
+mistral:7b-instruct
 ```
 
-Qwen2.5 doit analyser uniquement les éléments fournis par le collecteur. Le
+Mistral 7B Instruct : ~4.1 GB, meilleur français, recommandé.
+
+Mistral doit analyser uniquement les éléments fournis par le collecteur. Le
 modèle ne navigue pas lui-même sur le Web et ne devient jamais une source.
 
 Fonctions attendues :
@@ -95,16 +97,16 @@ Avis primaire de l'éditeur
     + NVD / identifiant CVE
     + CISA KEV / exploitation connue
     + correspondance produit-version du parc
-    > classement et score proposés par Qwen2.5
+    > classement et score proposés par Mistral
 ```
 
 ## Directive de configuration Docker
 
-Qwen2.5 doit fonctionner uniquement dans Docker pour OpenVigie.
+Mistral doit fonctionner uniquement dans Docker pour OpenVigie.
 
 Contraintes obligatoires :
 
-- ne pas installer Ollama ou Qwen2.5 nativement avec Homebrew, apt, winget ou un
+- ne pas installer Ollama ou Mistral nativement avec Homebrew, apt, winget ou un
   autre gestionnaire du système hôte ;
 - ne pas écrire le modèle dans un dossier personnel de l'utilisateur ;
 - conserver les fichiers du modèle dans le volume Docker
@@ -137,21 +139,22 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["ollama", "pull"]
-    command: ["${OLLAMA_MODEL:-qwen2.5:7b-instruct}"]
+    command: ["${OLLAMA_MODEL:-mistral:7b-instruct}"]
 ```
 
 Variables attendues dans `.env` :
 
 ```dotenv
-OLLAMA_MODEL=qwen2.5:7b-instruct
+# Mistral 7B Instruct : ~4.1 GB, meilleur français, recommandé.
+OLLAMA_MODEL=mistral:7b-instruct
 OLLAMA_PORT=11434
 OLLAMA_CONTEXT_LENGTH=2048
 OLLAMA_NUM_PARALLEL=1
 ```
 
 Le contexte de 2048 tokens et une seule inférence parallèle réduisent la pression
-mémoire sur les ordinateurs personnels. Qwen2.5 7B nécessite néanmoins environ
-6 Go de mémoire attribuée à Docker pour charger le modèle dans de bonnes
+mémoire sur les ordinateurs personnels. Mistral 7B Instruct nécessite néanmoins
+environ 6 Go de mémoire attribuée à Docker pour charger le modèle dans de bonnes
 conditions. Sur un Mac disposant de 8 Go de RAM, éviter les applications lourdes
 pendant l'inférence.
 
@@ -164,7 +167,7 @@ docker compose up -d --build
 ```
 
 Au premier démarrage, le service `ollama-model` télécharge
-`qwen2.5:7b-instruct`. Le conteneur doit ensuite se terminer avec le code `0`.
+`mistral:7b-instruct`. Le conteneur doit ensuite se terminer avec le code `0`.
 Les démarrages suivants réutilisent le modèle présent dans le volume.
 
 Ne pas considérer un conteneur d'initialisation arrêté avec le code `0` comme une
@@ -172,7 +175,7 @@ erreur. Il indique que le téléchargement s'est terminé correctement.
 
 ## Vérifications obligatoires
 
-Avant d'annoncer que Qwen2.5 est opérationnel, Claude doit vérifier toutes les
+Avant d'annoncer que Mistral est opérationnel, Claude doit vérifier toutes les
 étapes suivantes.
 
 ### 1. Configuration Compose
@@ -203,14 +206,14 @@ docker compose exec -T ollama ollama list
 La liste doit contenir exactement le tag configuré :
 
 ```text
-qwen2.5:7b-instruct
+mistral:7b-instruct
 ```
 
 ### 4. Véritable inférence locale
 
 ```bash
 docker compose exec -T ollama \
-  ollama run qwen2.5:7b-instruct "Réponds uniquement par : OpenVigie opérationnel"
+  ollama run mistral:7b-instruct "Réponds uniquement par : OpenVigie opérationnel"
 ```
 
 La seule présence du modèle dans `ollama list` ne suffit pas. Une réponse réelle
@@ -268,4 +271,4 @@ Avant toute modification :
 Si une migration vers un autre modèle est demandée ultérieurement, elle doit être
 explicite, documentée et appliquée de façon cohérente dans `compose.yaml`,
 `.env.example`, le collecteur, les tests et la documentation. Ne pas remplacer
-silencieusement `qwen2.5:7b-instruct`.
+silencieusement `mistral:7b-instruct`.

@@ -45,7 +45,8 @@ docker compose -f docker-compose.prod.yml ps
 
 ```bash
 # .env file
-OLLAMA_MODEL=qwen2.5:3b-instruct
+# Mistral 7B Instruct: ~4.1 GB, meilleur français, recommandé.
+OLLAMA_MODEL=mistral:7b-instruct
 OLLAMA_PORT=11434
 OLLAMA_CONTEXT_LENGTH=2048
 OLLAMA_NUM_PARALLEL=1

@@ -22,7 +22,8 @@ services:
     environment:
       OLLAMA_HOST: http://ollama:11434
     entrypoint: ["ollama", "pull"]
-    command: ["${OLLAMA_MODEL:-qwen2.5:7b-instruct}"]
+    # Mistral 7B Instruct: ~4.1 GB, meilleur français, recommandé.
+    command: ["${OLLAMA_MODEL:-mistral:7b-instruct}"]
     depends_on:
       ollama:
         condition: service_healthy
@@ -39,7 +40,7 @@ services:
       OPENVIGIE_REFRESH_SECONDS: ${OPENVIGIE_REFRESH_SECONDS:-86400}
       OPENVIGIE_FEED_REFRESH_SECONDS: ${OPENVIGIE_FEED_REFRESH_SECONDS:-10800}
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b-instruct}
     volumes:
       - openvigie_data:/data
     healthcheck:
