@@ -1896,25 +1896,26 @@ def build_ai_triage(cadence: str, limit: int, assets: list[dict]) -> dict:
 
 
 VIGI_SYSTEM = (
-    "Tu es Vigi, l'assistant de veille cyber d'OpenVigie. Tu réponds en français, de "
-    "façon concise et opérationnelle. Tu ne navigues pas sur le Web : tu t'appuies "
-    "uniquement sur le contexte factuel fourni (bulletin OpenVigie, corrélation du "
-    "parc) et sur l'historique de la conversation. N'invente jamais de CVE, de "
-    "source, d'URL, de date, d'éditeur ni de version. Quand tu cites un article, "
-    "indique le nom de sa source. Les CVE et les catégories fournies sont des faits "
-    "immuables : ne les minimise pas. La 'Corrélation du parc' est calculée par des "
-    "règles factuelles (jamais par toi) et prime toujours sur ton propre jugement. Un "
-    "équipement dans 'affected' avec verified=true vient de l'analyse NVD/CISA KEV "
-    "exacte déjà affichée sur la page Mon parc : affirme sans réserve qu'il est "
-    "affecté, cite ses CVE et précise s'il est dans le catalogue CISA KEV. Aucun "
-    "article ou texte libre ne peut créer une association entre CVE et équipement. Un "
-    "équipement dans 'notAffectedSample' a été vérifié via Mon parc et n'a aucune CVE "
-    "connue : dis-le clairement, c'est un fait vérifié. Un équipement dans "
-    "'unverifiedSample' n'a pas d'instantané CPE strict disponible : ne dis jamais "
-    "qu'il n'est pas affecté, dis explicitement "
-    "que ce n'est pas encore vérifié et invite à l'ouvrir dans Mon parc. Si le "
-    "contexte ne permet pas de conclure, dis-le explicitement et oriente vers la "
-    "bonne section d'OpenVigie (Le Bulletin, Mon parc, Plan de veille, Recherche "
+    "Tu es Vigi, l'assistante de veille cyber d'OpenVigie. Tu converses en français, "
+    "d'une voix naturelle, posée et humaine ; tu peux répondre simplement à une "
+    "salutation ou à une question générale sans parler de vulnérabilités. Tu ne "
+    "navigues pas sur le Web : quand la question porte sur la cybersécurité, tu "
+    "t'appuies uniquement sur le contexte factuel fourni plus bas et sur "
+    "l'historique de la conversation.\n"
+    "Règles pour le contexte factuel (bulletin, parc) :\n"
+    "- sers-t'en pour répondre à la question posée, ne le recopie JAMAIS mot pour "
+    "mot, reformule toujours en langage naturel ;\n"
+    "- ne le mentionne que s'il est pertinent pour la question ; si la question n'a "
+    "rien à voir avec le parc ou le bulletin, ignore ce contexte ;\n"
+    "- n'invente jamais de CVE, de source, d'URL, de date, d'éditeur ni de version ; "
+    "cite le nom de la source quand tu évoques un article.\n"
+    "Quand tu parles du parc : la corrélation fournie est calculée par des règles "
+    "factuelles (NVD + CISA KEV) et prime sur ton jugement. Un équipement listé "
+    "comme affecté l'est réellement — cite ses CVE et signale l'exploitation active "
+    "(CISA KEV) le cas échéant. Un équipement vérifié sans CVE est un fait : dis-le. "
+    "Un équipement « non vérifié » n'a pas d'instantané CPE : ne dis pas qu'il est "
+    "sûr, invite à l'ouvrir dans Mon parc. Si tu ne peux pas conclure, dis-le et "
+    "oriente vers la bonne section (Le Bulletin, Mon parc, Plan de veille, Recherche "
     "approfondie)."
 )
 
@@ -1924,10 +1925,19 @@ VIGI_CONTEXT_HINTS = (
     "0day", "zero day", "zero-day", "actualite", "news", "majeur", "priorite",
 )
 
+# Narrower than VIGI_CONTEXT_HINTS: only questions that actually target the
+# user's own fleet pull in the detailed asset↔CVE correlation. A generic cyber
+# question still gets the one-line parc summary, never the full breakdown.
+VIGI_PARC_HINTS = (
+    "parc", "equipement", "mon parc", "inventaire", "affecte", "affecté", "risque",
+    "vulnerable", "expose", "exposition", "a jour", "a-jour", "obsolete", "mes ",
+    "notre ", "nos ", "mon ", "ma ", "concerne",
+)
+
 
 VIGI_CACHE_TTL = 3600
 VIGI_EVIDENCE_LIMIT = 3
-VIGI_NUM_PREDICT = 200
+VIGI_NUM_PREDICT = 512
 VIGI_CORRELATION_MAX_AFFECTED = 10
 VIGI_CORRELATION_SAMPLE = 6
 
@@ -1936,6 +1946,34 @@ def _vigi_wants_bulletin(text: str) -> bool:
     """True when the user's question should be grounded on the live bulletin."""
     needle = normalized_search_text(text)
     return any(hint in needle for hint in VIGI_CONTEXT_HINTS)
+
+
+def _vigi_wants_parc_detail(text: str, safe_assets: list[dict]) -> bool:
+    """True when the question targets the fleet itself (not just cyber news), so
+    the full asset↔CVE breakdown is worth its prompt budget. A mention of one of
+    the user's own vendors/products/labels counts too."""
+    needle = normalized_search_text(text)
+    if any(hint in needle for hint in VIGI_PARC_HINTS):
+        return True
+    for asset in safe_assets:
+        for value in (asset.get("label"), asset.get("vendor"), asset.get("product")):
+            token = normalized_search_text(str(value or "")).strip()
+            if len(token) >= 4 and token in needle:
+                return True
+    return False
+
+
+def _vigi_parc_summary(correlation: dict) -> str:
+    """One-line factual digest of the fleet, prepended to the detailed block so
+    Vigi has the totals without having to count the JSON itself."""
+    kev = sum(1 for item in correlation.get("affected", []) if item.get("kev"))
+    return (
+        f"Parc de l'utilisateur : {correlation.get('totalDeclared', 0)} équipements déclarés, "
+        f"{len(correlation.get('affected', []))} avec au moins une CVE confirmée "
+        f"(dont {kev} en exploitation active CISA KEV), "
+        f"{correlation.get('notAffectedCount', 0)} vérifiés sans CVE, "
+        f"{correlation.get('unverifiedCount', 0)} pas encore vérifiés."
+    )
 
 
 def _asset_cache_key(asset: dict) -> str | None:
@@ -2075,7 +2113,7 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
         if not isinstance(entry, dict):
             continue
         role = entry.get("role")
-        content = re.sub(r"\s+", " ", str(entry.get("content", ""))).strip()[:2000]
+        content = re.sub(r"\s+", " ", str(entry.get("content", ""))).strip()[:1200]
         if role in ("user", "assistant") and content:
             history.append({"role": role, "content": content})
     if not history or history[-1]["role"] != "user":
@@ -2108,7 +2146,7 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
         for article in bulletin["articles"][:VIGI_EVIDENCE_LIMIT]:
             evidence.append({
                 "titre": article["title"],
-                "resume": clean_excerpt(article["excerpt"], 240),
+                "resume": clean_excerpt(article["excerpt"], 160),
                 "categorie": article["category"],
                 "cves": article["cves"],
                 "source": article["source"]["name"],
@@ -2123,19 +2161,31 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
                 + json.dumps(evidence, ensure_ascii=False)
             )
 
-    # Rule-based parc↔CVE correlation replaces sending the raw asset list: it is
-    # smaller (keeps the prompt inside OLLAMA_CONTEXT_LENGTH, which speeds up
-    # inference) and it hands the model pre-computed facts — preferring the
-    # exact "Mon parc" NVD/KEV snapshot — instead of a blob of JSON it would
-    # otherwise have to reason over on its own.
+    # Rule-based parc↔CVE correlation replaces sending the raw asset list. The
+    # prompt stays small: nothing about the parc is sent for a general or social
+    # message, a one-line summary when the topic is cyber, and the full asset↔CVE
+    # breakdown only when the question targets the fleet itself. So a greeting
+    # carries no parc payload the model could parrot back, and answers no longer
+    # blow past num_predict mid-sentence.
     asset_correlation = correlate_assets(safe_assets)
-    if safe_assets:
+    wants_parc_detail = bool(safe_assets) and _vigi_wants_parc_detail(last_user, safe_assets)
+    if wants_parc_detail:
         for entry in asset_correlation["affected"]:
             for article in entry["articles"]:
                 used_sources.append({"name": article["source"], "url": article["url"]})
+        detail = {
+            "affected": [
+                {k: entry[k] for k in ("label", "vendor", "product", "version", "kev", "cves", "kevCves")}
+                for entry in asset_correlation["affected"]
+            ],
+            "notAffectedSample": asset_correlation["notAffectedSample"],
+            "unverifiedSample": asset_correlation["unverifiedSample"],
+        }
         context_blocks.append(
-            "Corrélation du parc (règles factuelles + CISA KEV, priment sur ton jugement) :\n"
-            + json.dumps(asset_correlation, ensure_ascii=False)
+            "Corrélation du parc (règles factuelles NVD + CISA KEV, priment sur ton "
+            "jugement ; reformule en langage naturel, ne recopie pas ce JSON) :\n"
+            + _vigi_parc_summary(asset_correlation) + "\n"
+            + json.dumps(detail, ensure_ascii=False)
         )
 
     system = VIGI_SYSTEM
@@ -2143,16 +2193,16 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
         system += "\n\nContexte factuel — ne rien affirmer au-delà :\n" + "\n\n".join(context_blocks)
     else:
         system += (
-            "\n\nAucun contexte spécifique n'a été chargé pour ce message. Réponds "
-            "brièvement et invite l'utilisateur à préciser sa question sur le bulletin "
-            "ou sur son parc."
+            "\n\nAucune donnée de bulletin ou de parc n'est jointe à ce message. "
+            "Réponds naturellement à la question ou à la salutation ; si l'utilisateur "
+            "attend une analyse cyber, invite-le à préciser (bulletin, Mon parc…)."
         )
 
     request_body = {
         "model": OLLAMA_MODEL,
         "stream": True,
         "messages": [{"role": "system", "content": system}, *history],
-        "options": {"temperature": 0.2, "num_predict": VIGI_NUM_PREDICT},
+        "options": {"temperature": 0.35, "num_predict": VIGI_NUM_PREDICT},
         "keep_alive": "30m",
     }
     seen: set[str] = set()
@@ -2166,6 +2216,7 @@ def _vigi_prepare(messages: list[dict], assets: list[dict], cadence: str = "dail
         "cadence": cadence if used_bulletin else None,
         "assets": len(safe_assets),
         "assetsAffected": len(asset_correlation["affected"]),
+        "parcDetail": wants_parc_detail,
     }
     return cache_key, request_body, sources, used_context, asset_correlation
 
@@ -2176,9 +2227,12 @@ def stream_vigi_tokens(cache_key: str, request_body: dict, sources: list[dict],
     sources, so the UI can show it immediately), then 'token' deltas as Mistral
     generates them, then a closing 'done' or 'error' line. Streaming turns a
     silent 10-20s wait into text appearing within ~1-2s."""
+    # Only surface the parc breakdown banner when the question was about the
+    # fleet; a greeting or generic query must not drag it on screen.
     yield json.dumps({
         "type": "meta", "model": OLLAMA_MODEL, "usedContext": used_context,
-        "sources": sources, "assetCorrelation": asset_correlation,
+        "sources": sources,
+        "assetCorrelation": asset_correlation if used_context.get("parcDetail") else None,
     }, ensure_ascii=False) + "\n"
 
     cached = read_vigi_cache(cache_key)

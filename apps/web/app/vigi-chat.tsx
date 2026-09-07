@@ -40,6 +40,10 @@ type ChatMessage = {
   assetCorrelation?: AssetCorrelation;
   streaming?: boolean;
   error?: boolean;
+  /** Front-end-only greeting shown once when the panel opens. Never sent to the
+   *  backend — otherwise the model receives it as a prior assistant turn and
+   *  starts echoing it back on every reply. */
+  intro?: boolean;
 };
 
 type ResolvedAsset = {
@@ -54,7 +58,7 @@ type ResolvedAsset = {
 };
 
 type NdjsonEvent =
-  | { type: 'meta'; model: string; usedContext: ChatMessage['usedContext']; sources: ChatSource[]; assetCorrelation: AssetCorrelation }
+  | { type: 'meta'; model: string; usedContext: ChatMessage['usedContext']; sources: ChatSource[]; assetCorrelation: AssetCorrelation | null }
   | { type: 'token'; text: string }
   | { type: 'done'; cached?: boolean }
   | { type: 'error'; message: string };
@@ -122,7 +126,7 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
   const [pending, setPending] = useState(false);
   const [phase, setPhase] = useState<'idle' | 'checking' | 'streaming'>('idle');
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: WELCOME }]);
+  const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: WELCOME, intro: true }]);
   const threadRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -170,7 +174,7 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
             cadence,
             assets,
             messages: history
-              .filter((entry) => entry.role === 'user' || entry.role === 'assistant')
+              .filter((entry) => !entry.intro && (entry.role === 'user' || entry.role === 'assistant'))
               .slice(-12)
               .map((entry) => ({ role: entry.role, content: entry.content })),
           }),
@@ -198,7 +202,7 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
                 ...message,
                 sources: event.sources.slice(0, 8),
                 usedContext: event.usedContext,
-                assetCorrelation: event.assetCorrelation,
+                assetCorrelation: event.assetCorrelation ?? undefined,
               }));
               setPhase('streaming');
             } else if (event.type === 'token') {
