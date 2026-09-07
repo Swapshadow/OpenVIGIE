@@ -1586,3 +1586,35 @@ body { font-size: 15px; }
 :root[data-theme='light'] .nav-item[aria-current='page'] { color: var(--ink); }
 :root[data-theme='light'] .nav-item[aria-current='page'] .nav-icon { color: var(--cyan); }
 :root[data-theme='light'] .newspaper-sections button[aria-current='page'] { color: var(--ink); }
+
+/* Settings and persistent CVE notifications */
+.topbar { position: relative; z-index: 50; }
+.alerts-anchor { position: relative; }
+.alerts-popover { position: absolute; top: calc(100% + 12px); right: 0; z-index: 60; width: 260px; border: 1px solid var(--line, #526075); border-radius: 16px; background: var(--panel-solid, #151c2a); color: var(--text, #f4f6fc); box-shadow: 0 20px 60px #0005; padding: 16px; }
+.settings-popover { display: grid; gap: 6px; }
+.alerts-popover button, .email-settings button { padding: 9px 12px; border: 1px solid var(--line, #526075); border-radius: 8px; background: transparent; color: inherit; cursor: pointer; }
+.settings-popover button { text-align: left; }
+.alerts-popover button:hover, .email-settings button:hover { background: #8882; }
+.alerts-popover button:disabled, .email-settings button:disabled { opacity: .5; cursor: default; }
+.notification-trigger { position: relative; }
+.notification-badge { position: absolute; right: -6px; top: -7px; background: #bd244b; color: white; border-radius: 20px; font-size: 10px; font-weight: 700; padding: 3px 5px; }
+.notification-panel { width: min(430px, calc(100vw - 40px)); max-height: 75vh; overflow-y: auto; }
+.notification-panel h2 { font-size: 18px; }
+.notification-panel small { font-size: 11px; opacity: .8; }
+.notification-list, .recipient-list { list-style: none; padding: 0; }
+.notification-list li { padding: 14px 10px; border-bottom: 1px solid var(--line, #526075); overflow-wrap: anywhere; }
+.notification-list li.unread { background: #e7a23212; border-left: 3px solid #e7a232; }
+.notification-severity { margin-left: 10px; font-size: 11px; font-weight: bold; }
+.email-settings { padding: clamp(20px, 4vw, 48px); min-width: 0; }
+.email-settings h1 { font-size: 28px; }.email-settings h2 { margin-top: 28px; }
+.email-settings fieldset { border: 0; margin: 20px 0; padding: 0; min-width: 0; }
+.email-settings label { display: grid; gap: 8px; margin-bottom: 16px; }
+.email-settings input, .email-settings select { width: 100%; min-width: 0; border: 1px solid var(--line, #526075); background: var(--panel-solid, #151c2a); color: var(--text, #f4f6fc); padding: 10px; border-radius: 8px; }
+.smtp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+.email-settings .alerts-checkbox { display: flex; align-items: center; }.alerts-checkbox input { width: auto; }
+.alerts-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.alerts-help { font-size: 13px; line-height: 1.6; opacity: .85; margin: 12px 0 24px; }
+.alerts-error { color: #ff7895; }
+.recipient-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; }.recipient-list span { flex: 1; overflow-wrap: anywhere; }
+[data-theme="light"] .alerts-popover, [data-theme="light"] .email-settings input, [data-theme="light"] .email-settings select { background: #fffaf3; color: #302a29; }
+@media (max-width: 640px) { .smtp-grid { grid-template-columns: 1fr; } .notification-panel { right: -50px; } }

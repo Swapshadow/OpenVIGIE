@@ -6,6 +6,9 @@ import InventoryWorkspace from './inventory-workspace';
 import LeakToday from './leak-today';
 import BulletinWorkspace from './bulletin-workspace';
 import VigiChat from './vigi-chat';
+import SettingsMenu from './settings-menu';
+import EmailAlertsConfig from './email-alerts-config';
+import NotificationCenter from './notification-center';
 
 type View = 'bulletin' | 'leaks' | 'assets';
 type Theme = 'dark' | 'light';
@@ -31,15 +34,21 @@ function AppIcon({ name }: { name: IconName }) {
 
 export default function Home() {
   const [view, setView] = useState<View>('bulletin');
+  const [settingsView, setSettingsView] = useState<'email' | 'about' | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const navigate = (next: View) => { setSettingsView(null); setView(next); };
   const [cadence] = useState<Cadence>('daily');
   const [theme, setTheme] = useState<Theme>('dark');
 
   useEffect(() => {
-    try {
-      if (window.localStorage.getItem(THEME_STORAGE_KEY) === 'light') setTheme('light');
-    } catch {
-      // Ignore — theme just stays at the dark default.
-    }
+    const timer = setTimeout(() => {
+      try {
+        if (window.localStorage.getItem(THEME_STORAGE_KEY) === 'light') setTheme('light');
+      } catch {
+        // Storage may be unavailable in privacy mode.
+      }
+    }, 0);
+    return () => clearTimeout(timer);
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -80,8 +89,9 @@ export default function Home() {
           >
             <AppIcon name={theme === 'dark' ? 'sun' : 'moon'} />
           </button>
-          <button type="button" className="icon-button" aria-label="Rechercher" onClick={() => setView('bulletin')}><AppIcon name="search" /></button>
-          <button type="button" className="icon-button" aria-label="Notifications"><AppIcon name="notifications" /></button>
+          <button type="button" className="icon-button" aria-label="Rechercher" onClick={() => navigate('bulletin')}><AppIcon name="search" /></button>
+          <NotificationCenter open={notificationsOpen} onOpenChange={setNotificationsOpen} />
+          <SettingsMenu theme={theme} onTheme={toggleTheme} onEmail={() => setSettingsView('email')} onNotifications={() => setNotificationsOpen(true)} onInventory={() => navigate('assets')} onAbout={() => setSettingsView('about')} />
         </div>
       </header>
 
@@ -97,9 +107,9 @@ export default function Home() {
               <button
                 className="nav-item"
                 type="button"
-                aria-current={view === id ? 'page' : undefined}
+                aria-current={!settingsView && view === id ? 'page' : undefined}
                 key={id}
-                onClick={() => setView(id as View)}
+                onClick={() => navigate(id as View)}
               >
                 <span className="nav-icon"><AppIcon name={id as View} /></span><span>{label}</span>
               </button>
@@ -113,7 +123,7 @@ export default function Home() {
           </div>
         </aside>
 
-        {view === 'bulletin' ? (
+        {settingsView === 'email' ? <EmailAlertsConfig /> : settingsView === 'about' ? <section className="email-settings glass-panel"><h1>À propos d’OpenVigie</h1><p>Veille de vulnérabilités open source centrée sur votre parc d’équipements.</p><p>Licence AGPL-3.0. Confirmez les correspondances CVE dans les avis éditeurs.</p><a href="https://github.com/Swapshadow/openvigie" target="_blank" rel="noopener noreferrer">Code source et contributions ↗</a></section> : view === 'bulletin' ? (
           <BulletinWorkspace />
         ) : view === 'leaks' ? (
           <LeakToday />

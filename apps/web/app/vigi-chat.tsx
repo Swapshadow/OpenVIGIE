@@ -177,7 +177,7 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
         });
 
         if (!response.ok || !response.body) {
-          const payload = await response.json().catch(() => ({}));
+          const payload = await response.json().catch(() => ({})) as { error?: string };
           throw new Error(payload?.error ?? `Erreur ${response.status}`);
         }
 

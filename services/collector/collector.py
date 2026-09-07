@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import email_notifier
 import hashlib
 import html
 import json
@@ -407,8 +408,16 @@ nvd_rate_lock = threading.Lock()
 last_nvd_request = 0.0
 
 
+class DatabaseConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def connect() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH, timeout=20)
+    connection = sqlite3.connect(DB_PATH, timeout=20, factory=DatabaseConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA busy_timeout=20000")
@@ -417,6 +426,8 @@ def connect() -> sqlite3.Connection:
 
 def initialize_database() -> None:
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    with connect() as connection:
+        email_notifier.initialize(connection)
     with connect() as connection:
         connection.execute(
             """
@@ -2687,6 +2698,7 @@ def refresh_query(key: str, query: dict[str, str], force: bool = False) -> dict:
                     "UPDATE monitored_queries SET payload_json=?, last_attempt=?, last_success=?, next_refresh=?, last_error=NULL WHERE cache_key=?",
                     (json.dumps(payload, separators=(",", ":")), now, now, now + REFRESH_SECONDS, key),
                 )
+                email_notifier.record(connection, key, query, payload)
             return attach_related_articles(payload, query)
         except Exception as error:
             with database_lock, connect() as connection:
@@ -2772,6 +2784,8 @@ class Handler(BaseHTTPRequestHandler):
         return query, cache_key(query)
 
     def do_GET(self) -> None:  # noqa: N802
+        if email_notifier.handle(self, connect):
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/health":
             with database_lock, connect() as connection:
@@ -2911,6 +2925,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "Erreur interne du collecteur"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if email_notifier.handle(self, connect):
+            return
         path = urllib.parse.urlparse(self.path).path
         if path == "/ai/chat":
             try:
@@ -3004,6 +3020,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Route inconnue"})
 
     def do_DELETE(self) -> None:  # noqa: N802
+        if email_notifier.handle(self, connect):
+            return
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/watch-plan/alert":
             try:
@@ -3025,12 +3043,17 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as error:
             self.send_json(400, {"error": str(error)})
 
+    def do_PUT(self) -> None:
+        if not email_notifier.handle(self, connect):
+            self.send_json(404, {"error": "Route inconnue"})
+
     def log_message(self, message: str, *args: object) -> None:
         print(f"collector {self.address_string()} {message % args}", flush=True)
 
 
 if __name__ == "__main__":
     initialize_database()
+    threading.Thread(target=email_notifier.scheduler, args=(connect,), daemon=True).start()
     threading.Thread(target=vulnerability_scheduler, name="openvigie-cve-scheduler", daemon=True).start()
     threading.Thread(target=feed_scheduler, name="openvigie-feed-scheduler", daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", 8787), Handler)

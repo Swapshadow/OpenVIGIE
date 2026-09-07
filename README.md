@@ -239,3 +239,46 @@ See [LICENSE](LICENSE) for the complete terms.
 
 OpenVigie was initiated by Swapshadow. The initial product concept and prototype
 were developed collaboratively with OpenAI Codex.
+
+## Email alerts and notifications
+
+The gear menu opens SMTP settings, notifications, inventory, theme and project information.
+The bell displays persistent notifications for each monitored product/version and CVE.
+The first successful collection creates notifications for all matching CVEs. Later collections
+are deduplicated, including across restarts. Confirm matches in the vendor advisory.
+Equipment identity uses the existing collector product/version key, shared across browsers.
+
+Set `OPENVIGIE_SECRET_KEY` in the collector environment to a persistent random secret of at
+least 32 characters. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`
+and save it in the ignored `.env` file. Restart the collector. Never commit the key.
+Passwords use Fernet with a SHA-256-derived key. Back up the key securely with the database;
+changing it requires re-entering the SMTP password. API responses never return passwords
+or ciphertext. Leaving the password blank preserves it.
+
+Configure SMTP, save recipients, test TLS/authentication, then enable delivery. The test does
+not send email. Gmail uses an app password. Proton uses SMTP submission credentials for an
+eligible plan: https://proton.me/support/smtp-submission. Outlook.com requires OAuth2:
+https://support.microsoft.com/en-US/Outlook/pop-imap-and-smtp-settings-for-outlook-com.
+This password-based SMTP service requires a compatible relay for those accounts; the Outlook
+preset does not implement OAuth2. TLS certificate validation is mandatory.
+
+The outbox checks every 30 seconds, retrying failures after five minutes. Enabling email sends
+pending notifications. Delivery is tracked per recipient so partial failures do not resend to
+recipients already accepted by SMTP. A crash between SMTP acceptance and the SQLite
+acknowledgement can still produce a duplicate. Removed monitored queries keep their
+notification history but no longer send pending emails.
+
+Settings follow the existing single-instance trust model: restrict the web application to
+trusted operators or an authenticated reverse proxy, and do not expose the collector publicly.
+The new web write routes reject cross-origin requests.
+
+API: `GET/POST /api/settings/email-config`, `POST /api/settings/email-config/test`,
+`GET/POST/PUT/DELETE /api/settings/email-recipients` (JSON `{id,email}` as applicable),
+`GET /api/notifications?offset=0` (50 per page), `POST /api/notifications/read` (`{id}`),
+and `POST /api/notifications/mark-all-read` (`{}`). Writes use `application/json`.
+
+Backend checks: install `services/collector/requirements.txt`, then run
+`python -m py_compile services/collector/collector.py services/collector/email_notifier.py`
+and `python -m unittest discover -s services/collector -p "test_*.py"`.
+For local web development set `OPENVIGIE_COLLECTOR_URL=http://127.0.0.1:8787` and run the
+collector locally with `OPENVIGIE_DB_PATH` pointing to a writable SQLite file.

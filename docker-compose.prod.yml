@@ -35,6 +35,7 @@ services:
       dockerfile: Dockerfile
     environment:
       OPENVIGIE_DB_PATH: /data/openvigie.db
+      OPENVIGIE_SECRET_KEY: ${OPENVIGIE_SECRET_KEY:-}
       OPENVIGIE_COLLECTOR_URL: http://web:3000
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-mistral:7b-instruct}
