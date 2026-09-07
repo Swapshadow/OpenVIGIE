@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { findProduct, findVendor, vendorCatalog } from './asset-catalog';
+import { downloadParcReport, type ParcReportAsset } from './parc-report';
 import type { InventoryAsset, Vulnerability, VulnerabilityResponse } from './vulnerability-types';
 
 type DossierTab = 'summary' | 'attack' | 'evidence';
@@ -48,6 +49,8 @@ export default function InventoryWorkspace() {
   const [severity, setSeverity] = useState<SeverityFilter>('ALL');
   const [search, setSearch] = useState('');
   const [deepPatchOpen, setDeepPatchOpen] = useState(false);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportStatus, setReportStatus] = useState('');
   const requestSequence = useRef(0);
 
   const selectedVendor = findVendor(vendorId);
@@ -176,6 +179,59 @@ export default function InventoryWorkspace() {
     };
   }, [refresh, selectedAsset]);
 
+  // Standalone HTML export: pull the CVE snapshot for every asset (same endpoint
+  // the workspace already uses per asset), then hand the rows to parc-report.
+  const exportReport = useCallback(async () => {
+    if (reportBusy || inventory.length === 0) return;
+    setReportBusy(true);
+    setReportStatus('Génération du rapport…');
+    const rows: ParcReportAsset[] = [];
+    try {
+      for (let index = 0; index < inventory.length; index += 1) {
+        const asset = inventory[index];
+        const vendor = findVendor(asset.vendorId);
+        const product = findProduct(asset.vendorId, asset.productId);
+        setReportStatus(`Analyse ${index + 1}/${inventory.length} · ${asset.label || product.name}`);
+        const params = new URLSearchParams({
+          vendor: vendor.name, product: product.name, version: asset.version, part: product.part,
+        });
+        if (product.cpeVendor) params.set('cpeVendor', product.cpeVendor);
+        if (product.cpeProduct) params.set('cpeProduct', product.cpeProduct);
+        let vulnerabilities: Vulnerability[] = [];
+        let matchingMessage: string | undefined;
+        try {
+          const response = await fetch(`/api/vulnerabilities?${params.toString()}`, { cache: 'no-store' });
+          const payload = await response.json() as VulnerabilityResponse & { error?: string };
+          if (response.ok) {
+            vulnerabilities = payload.vulnerabilities ?? [];
+            matchingMessage = payload.matching?.message;
+          } else {
+            matchingMessage = payload.error ?? 'Synchronisation indisponible pour cet équipement.';
+          }
+        } catch {
+          matchingMessage = 'Synchronisation indisponible pour cet équipement.';
+        }
+        rows.push({
+          label: asset.label || product.name,
+          vendor: vendor.name,
+          product: product.name,
+          version: asset.version,
+          exposure: asset.exposure,
+          advisoryUrl: product.advisoryUrl,
+          matchingMessage,
+          vulnerabilities,
+        });
+      }
+      downloadParcReport(rows);
+      setReportStatus('Rapport téléchargé.');
+    } catch {
+      setReportStatus('Échec de la génération du rapport.');
+    } finally {
+      setReportBusy(false);
+      window.setTimeout(() => setReportStatus(''), 4000);
+    }
+  }, [inventory, reportBusy]);
+
   const filteredVulnerabilities = useMemo(() => {
     const query = search.trim().toLowerCase();
     return (data?.vulnerabilities ?? []).filter((item) => {
@@ -249,6 +305,15 @@ export default function InventoryWorkspace() {
         </div>
         <div className="inventory-actions">
           <span className="auto-refresh"><i /> Actualisation CVE · quotidienne</span>
+          {reportStatus ? <span className="report-status" role="status">{reportStatus}</span> : null}
+          <button
+            type="button"
+            className="ghost-action"
+            onClick={() => void exportReport()}
+            disabled={reportBusy || inventory.length === 0}
+          >
+            {reportBusy ? 'Génération…' : 'Exporter rapport HTML'}
+          </button>
           <button type="button" className="primary-action" onClick={() => setFormOpen((open) => !open)}>{formOpen ? 'Fermer' : '+ Ajouter un équipement'}</button>
         </div>
       </div>

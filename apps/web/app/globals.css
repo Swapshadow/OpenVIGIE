@@ -225,6 +225,10 @@ button { color: inherit; }
 .auto-refresh i { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
 .primary-action, .save-asset { min-height: 38px; padding: 0 13px; border: 1px solid rgba(var(--cyan-rgb),.48); border-radius: 12px; color: var(--night); background: linear-gradient(135deg, var(--cyan), var(--accent-tint) 52%, var(--pink)); cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; }
 .primary-action:hover, .save-asset:hover { filter: brightness(1.08); }
+.ghost-action { min-height: 38px; padding: 0 13px; border: 1px solid rgba(var(--cyan-rgb),.4); border-radius: 12px; color: var(--ink); background: rgba(var(--cyan-rgb),.08); cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; }
+.ghost-action:hover:not(:disabled) { background: rgba(var(--cyan-rgb),.16); }
+.ghost-action:disabled { opacity: .5; cursor: not-allowed; }
+.report-status { color: var(--muted); font-family: var(--font-geist-mono), monospace; font-size: 9px; }
 
 
 /* ── Recherche dans le catalogue (55 marques) ────────────────────────────── */
