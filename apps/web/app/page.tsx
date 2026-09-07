@@ -74,10 +74,10 @@ export default function Home() {
       <div className="horizon-grid" aria-hidden="true" />
 
       <header className="topbar glass-panel">
-        <a className="brand" href="#main-content" aria-label="OpenVigie, aller au contenu">
+        <button className="brand" type="button" aria-label="OpenVigie, retour au bulletin" onClick={() => { navigate('bulletin'); setNotificationsOpen(false); }}>
           <span className="brand-mark"><AppIcon name="radar" /></span>
           <span><b>OPEN</b>VIGIE</span>
-        </a>
+        </button>
         <div className="sync-state"><span aria-hidden="true" />CVE + sources éditoriales en direct</div>
         <div className="top-actions">
           <button

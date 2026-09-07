@@ -1623,3 +1623,5 @@ body { font-size: 15px; }
 /* Native select popups do not consistently inherit their select colors. */
 select option, select optgroup { background-color: #151c2a; color: #f4f6fc; }
 [data-theme="light"] select option, [data-theme="light"] select optgroup { background-color: #fffaf3; color: #302a29; }
+
+button.brand { border: 0; padding: 0; background: transparent; cursor: pointer; }
