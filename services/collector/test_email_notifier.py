@@ -223,5 +223,21 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(client.send_message.call_count, 2)
         self.assertTrue(all('0 CVE' in call.args[0]['Subject'] for call in client.send_message.call_args_list))
 
+    def test_readded_equipment_initial_digest_includes_historical_cves(self):
+        query = {'vendor':'Fortinet', 'product':'FortiOS', 'version':'7.6.3'}
+        vulnerabilities = [
+            {'id':'CVE-2025-59718', 'severity':'CRITICAL', 'confidence':'confirmed'},
+            {'id':'CVE-2026-24858', 'severity':'CRITICAL', 'confidence':'confirmed'},
+        ]
+        with collector.connect() as db:
+            notifier.record(db, 'forti', query, {'vulnerabilities': vulnerabilities}, initial_scan=False)
+            db.execute("UPDATE notifications SET email_sent=1 WHERE equipment='forti'")
+            db.execute("UPDATE detection_cycles SET email_sent=1 WHERE equipment='forti'")
+            notifier.record(db, 'forti', query, {'vulnerabilities': vulnerabilities}, initial_scan=True)
+            cycle = db.execute("SELECT * FROM detection_cycles WHERE equipment='forti' AND initial_scan=1 LIMIT 1").fetchone()
+            rows = db.execute("SELECT * FROM notifications WHERE cycle_id=? AND email_sent=0", (cycle['id'],)).fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertIn('2 CVE', notifier.digest_message(self.settings, cycle, rows, 'a@example.com')['Subject'])
+
 if __name__ == '__main__':
     unittest.main()

@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from packaging.version import InvalidVersion, Version
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DB_PATH = os.environ.get("OPENVIGIE_DB_PATH", "/data/openvigie.db")
@@ -2582,13 +2583,11 @@ MATCHING_POLICY = 3
 
 
 def compare_versions(left: str, right: str) -> int | None:
-    """Only order dotted numeric releases; never guess vendor suffix ordering."""
-    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", left) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", right):
+    """Compare releases semantically; reject versions the parser cannot order."""
+    try:
+        a, b = Version(left), Version(right)
+    except (InvalidVersion, TypeError):
         return None
-    a, b = [int(n) for n in left.split('.')], [int(n) for n in right.split('.')]
-    length = max(len(a), len(b))
-    a += [0] * (length - len(a))
-    b += [0] * (length - len(b))
     return (a > b) - (a < b)
 
 
@@ -2628,14 +2627,21 @@ def cve_confidence(cve: dict, query: dict) -> str:
                 return False
         return True
 
-    def node(item):
+    def cpe_matches(item):
         if item.get('negate'):
-            return False
-        return any(leaf(match) for match in item.get('cpeMatch', [])) or any(
-            node(child) for child in item.get('nodes', []) + item.get('children', [])
-        )
+            return
+        yield from item.get('cpeMatch', [])
+        for child in item.get('nodes', []) + item.get('children', []):
+            yield from cpe_matches(child)
 
-    return 'confirmed' if any(node(configuration) for configuration in cve['configurations']) else 'excluded'
+    # NVD configurations commonly split affected Fortinet products across OR
+    # nodes. Inspect every cpeMatch and accept as soon as one structured CPE
+    # covers the installed version.
+    return 'confirmed' if any(
+        leaf(match)
+        for configuration in cve['configurations']
+        for match in cpe_matches(configuration)
+    ) else 'excluded'
 
 
 def collect(query: dict[str, str]) -> dict:

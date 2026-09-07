@@ -161,18 +161,23 @@ def record(connection, equipment, query, payload, initial_scan=False):
             continue
         old = previous.get(cve['id'])
         promoted = old and old['confidence'] != 'confirmed' and confidence == 'confirmed' and not old['email_sent']
-        is_new = not old or promoted
+        # Re-adding an equipment starts a new initial scan even when historical
+        # notifications for the same cache key remain in the database. Attach
+        # every current confirmed CVE to this cycle so its digest cannot say 0.
+        is_new = initial_scan or not old or promoted
         if is_new:
             new_count += 1
             new_confirmed += confidence == 'confirmed'
         urls = [r.get('url', '') for r in cve.get('references', []) if 'Vendor Advisory' in r.get('tags', [])]
         url = next((u for u in urls if u.startswith(('https://', 'http://'))), 'https://nvd.nist.gov/vuln/detail/' + cve['id'])
-        connection.execute("""INSERT INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at,confidence,cycle_id,initial_scan)
-            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(equipment,cve_id) DO UPDATE SET
+        connection.execute("""INSERT INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at,confidence,cycle_id,initial_scan,email_sent)
+            VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(equipment,cve_id) DO UPDATE SET
             confidence=excluded.confidence,severity=excluded.severity,advisory_url=excluded.advisory_url,
-            cycle_id=excluded.cycle_id,initial_scan=excluded.initial_scan""",
+            cycle_id=excluded.cycle_id,initial_scan=excluded.initial_scan,
+            email_sent=excluded.email_sent""",
             (equipment,cve['id'],cve.get('severity','UNKNOWN'),product,url,now,confidence,
-             cycle if is_new else old['cycle_id'], int(initial_scan) if is_new else old['initial_scan']))
+             cycle if is_new else old['cycle_id'], int(initial_scan) if is_new else old['initial_scan'],
+             0 if is_new else old['email_sent']))
     if new_count or initial_scan:
         connection.execute('INSERT INTO detection_cycles(id,equipment,product,initial_scan,created_at,email_sent) VALUES(?,?,?,?,?,?)',
                            (cycle,equipment,product,int(initial_scan),now,int(not initial_scan and not new_confirmed)))

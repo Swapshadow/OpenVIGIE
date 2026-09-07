@@ -30,6 +30,12 @@ class MatchingTests(unittest.TestCase):
         ]:
             self.assertEqual(collector.cve_confidence(cve(entry(FORTI, **bounds)), FORTI), expected)
 
+    def test_semantic_version_order_and_all_or_blocks(self):
+        self.assertEqual(collector.compare_versions('7.6.10', '7.6.3'), 1)
+        item = cve(entry(MAC, '26.6.1'), entry(FORTI, versionStartIncluding='7.6.0', versionEndIncluding='7.6.3'))
+        item['configurations'].insert(0, {'nodes': [{'cpeMatch': [entry(MAC, '15.0')]}]})
+        self.assertEqual(collector.cve_confidence(item, FORTI), 'confirmed')
+
     def test_ambiguous_data_and_identity(self):
         for item in ({}, cve(entry(MAC)), cve(entry(MAC, versionEndExcluding='26.6.1-beta'))):
             self.assertEqual(collector.cve_confidence(item, MAC), 'excluded')
