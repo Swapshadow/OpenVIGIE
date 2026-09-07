@@ -270,7 +270,7 @@ export default function InventoryWorkspace() {
                 setVersion('');
                 setCustomVersion(false);
               }}>
-                {vendorCatalog.map((vendor) => <option value={vendor.id} key={vendor.id}>{vendor.name}</option>)}
+                {[...vendorCatalog].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })).map((vendor) => <option value={vendor.id} key={vendor.id}>{vendor.name}</option>)}
               </select>
             </label>
             <label>

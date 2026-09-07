@@ -1618,3 +1618,8 @@ body { font-size: 15px; }
 .recipient-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 0; }.recipient-list span { flex: 1; overflow-wrap: anywhere; }
 [data-theme="light"] .alerts-popover, [data-theme="light"] .email-settings input, [data-theme="light"] .email-settings select { background: #fffaf3; color: #302a29; }
 @media (max-width: 640px) { .smtp-grid { grid-template-columns: 1fr; } .notification-panel { right: -50px; } }
+
+
+/* Native select popups do not consistently inherit their select colors. */
+select option, select optgroup { background-color: #151c2a; color: #f4f6fc; }
+[data-theme="light"] select option, [data-theme="light"] select optgroup { background-color: #fffaf3; color: #302a29; }
