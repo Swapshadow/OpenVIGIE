@@ -6,6 +6,7 @@ const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] });
 const geistMono = Geist_Mono({ variable: '--font-geist-mono', subsets: ['latin'] });
 
 export const metadata: Metadata = {
+  icons: { icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }, { url: '/favicon.ico', sizes: '16x16 32x32 48x48' }] },
   title: 'OpenVigie — Veille cyber, vulnérabilités et bulletin stratégique',
   description: 'Plateforme open source de veille cyber : vulnérabilités contextualisées, bulletin quotidien, synthèse hebdomadaire et dossier stratégique mensuel.',
   openGraph: {

@@ -1625,3 +1625,11 @@ select option, select optgroup { background-color: #151c2a; color: #f4f6fc; }
 [data-theme="light"] select option, [data-theme="light"] select optgroup { background-color: #fffaf3; color: #302a29; }
 
 button.brand { border: 0; padding: 0; background: transparent; cursor: pointer; }
+
+.brand-mark .brand-radar { width: 32px; height: 32px; color: #58f3ff; }
+.radar-wave { transform-origin: 16px 16px; animation: radar-wave 2.8s ease-out infinite; }
+.radar-wave-delayed { animation-delay: -1.4s; }
+.radar-contact { animation: radar-contact 1.4s ease-in-out infinite; }
+@keyframes radar-wave { from { transform: scale(.2); opacity: .85; } to { transform: scale(1); opacity: 0; } }
+@keyframes radar-contact { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .radar-wave, .radar-contact { animation: none; } .radar-wave { opacity: .2; } }

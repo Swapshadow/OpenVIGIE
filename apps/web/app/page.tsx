@@ -6,6 +6,7 @@ import InventoryWorkspace from './inventory-workspace';
 import LeakToday from './leak-today';
 import BulletinWorkspace from './bulletin-workspace';
 import VigiChat from './vigi-chat';
+import BrandRadar from './brand-radar';
 import SettingsMenu from './settings-menu';
 import EmailAlertsConfig from './email-alerts-config';
 import NotificationCenter from './notification-center';
@@ -75,7 +76,7 @@ export default function Home() {
 
       <header className="topbar glass-panel">
         <button className="brand" type="button" aria-label="OpenVigie, retour au bulletin" onClick={() => { navigate('bulletin'); setNotificationsOpen(false); }}>
-          <span className="brand-mark"><AppIcon name="radar" /></span>
+          <span className="brand-mark"><BrandRadar /></span>
           <span><b>OPEN</b>VIGIE</span>
         </button>
         <div className="sync-state"><span aria-hidden="true" />CVE + sources éditoriales en direct</div>
