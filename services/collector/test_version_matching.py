@@ -55,6 +55,18 @@ class MatchingTests(unittest.TestCase):
         match = dict(vulnerable=True, criteria='cpe:2.3:a:oracle:database_server:23ai:*:*:*:*:*:*:*')
         self.assertEqual(collector.cve_confidence(cve(match), oracle), 'confirmed')
 
+    def test_structured_platform_qualifiers_do_not_hide_exact_product_version(self):
+        client = dict(vendor='Fortinet', product='FortiClient', version='7.4.3', part='a', cpeVendor='fortinet', cpeProduct='forticlient')
+        match = dict(vulnerable=True, criteria='cpe:2.3:a:fortinet:forticlient:7.4.3:*:*:*:*:windows:*:*')
+        self.assertEqual(collector.cve_confidence(cve(match), client), 'confirmed')
+
+    def test_sql_release_family_and_primary_advisory_range(self):
+        sql = dict(vendor='Microsoft', product='SQL Server', version='2022', part='a', cpeVendor='microsoft', cpeProduct='sql_server')
+        match = dict(vulnerable=True, criteria='cpe:2.3:a:microsoft:sql_server_2022:16.0.1000.6:*:*:*:*:*:x64:*')
+        self.assertEqual(collector.cve_confidence(cve(match), sql), 'confirmed')
+        pam = dict(vendor='Fortinet', product='FortiPAM', version='1.9.1', part='o', cpeVendor='fortinet', cpeProduct='fortipam')
+        self.assertEqual(collector.primary_advisory_confidence('CVE-2026-49975', pam), 'confirmed')
+
     def test_ambiguous_data_and_identity(self):
         for item in ({}, cve(entry(MAC)), cve(entry(MAC, versionEndExcluding='26.6.1-beta'))):
             self.assertEqual(collector.cve_confidence(item, MAC), 'excluded')
@@ -89,7 +101,8 @@ class MatchingTests(unittest.TestCase):
             result = collector.collect(MAC)
         self.assertEqual(fetch.call_count, 1)
         self.assertEqual(result['vulnerabilities'], [])
-        self.assertIn('isVulnerable=', fetch.call_args.args[0])
+        self.assertIn('virtualMatchString=', fetch.call_args.args[0])
+        self.assertNotIn('keywordSearch=', fetch.call_args.args[0])
 
     def test_pagination_and_per_cve_filter(self):
         first = cve(entry(FORTI, versionEndExcluding='7.6.3'))

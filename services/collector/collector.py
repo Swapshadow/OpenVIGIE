@@ -2579,7 +2579,13 @@ def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
     return enriched
 
 
-MATCHING_POLICY = 4
+MATCHING_POLICY = 5
+
+PRIMARY_ADVISORY_RANGES = {
+    # CERTFR-2026-AVI-1015 / Fortinet FG-IR-26-163. NVD currently exposes the
+    # upstream Apache CVE without the affected Fortinet appliance CPEs.
+    ('fortinet', 'fortipam', 'CVE-2026-49975'): (None, '1.9.2'),
+}
 
 
 def vmware_release(value: str) -> tuple[str, str] | None:
@@ -2602,17 +2608,21 @@ def canonical_cpe_version(vendor: str, product: str, version: str) -> str:
 
 def cpe_queries(query: dict[str, str]) -> list[str]:
     """Return exact structured CPE names used to retrieve NVD candidates."""
-    identities = [(query['part'], query['cpeProduct'])]
-    versions = [(canonical_cpe_version(query['cpeVendor'], query['cpeProduct'], query['version']), '*')]
+    pairs = [(query['part'], query['cpeProduct'],
+              canonical_cpe_version(query['cpeVendor'], query['cpeProduct'], query['version']), '*')]
     if query.get('cpeVendor', '').lower() == 'vmware' and query.get('cpeProduct', '').lower() in ('esxi', 'esx'):
         identities = [(part, product) for part in ('o', 'a') for product in ('esxi', 'esx')]
+        versions = [(query['version'], '*')]
         release = vmware_release(query['version'])
         if release:
             versions.append(release)
+        pairs = [(part, product, version, update) for part, product in identities for version, update in versions]
+    if query.get('cpeVendor', '').lower() == 'microsoft' and query.get('cpeProduct', '').lower() == 'sql_server' and query['version'] in ('2016', '2017', '2019', '2022', '2025'):
+        pairs.append(('a', f"sql_server_{query['version']}", '*', '*'))
     return list(dict.fromkeys(
         f"cpe:2.3:{part}:{cpe_component(query['cpeVendor'])}:{cpe_component(product)}:"
         f"{cpe_component(version)}:{cpe_component(update)}:*:*:*:*:*:*"
-        for part, product in identities for version, update in versions
+        for part, product, version, update in pairs
     ))
 
 
@@ -2639,17 +2649,19 @@ def cve_confidence(cve: dict, query: dict) -> str:
             return False
         part, cpe_vendor, cpe_product, cpe_version, cpe_update = fields[2:7]
         vmware_esxi = vendor == 'vmware' and product in ('esxi', 'esx')
+        sql_family = vendor == 'microsoft' and product == 'sql_server' and version in ('2016', '2017', '2019', '2022', '2025')
         identity = (cpe_vendor.lower() == vendor
                     and (cpe_product.lower() == product and part == query.get('part', 'a')
-                         or vmware_esxi and cpe_product.lower() in ('esxi', 'esx') and part in ('o', 'a')))
+                         or vmware_esxi and cpe_product.lower() in ('esxi', 'esx') and part in ('o', 'a')
+                         or sql_family and cpe_product.lower() == f'sql_server_{version}' and part == 'a'))
         if not identity or match.get('vulnerable') is not True:
-            return False
-        if any(f != '*' for f in fields[7:]):
             return False
         installed_version = canonical_cpe_version(vendor, product, version)
         bounds = [(key, match[key]) for key in ('versionStartIncluding', 'versionStartExcluding', 'versionEndIncluding', 'versionEndExcluding') if key in match]
         if cpe_version not in ('*', '-'):
             exact = re.sub(r'\\(.)', r'\1', cpe_version).lower()
+            if sql_family and cpe_product.lower() == f'sql_server_{version}':
+                return True
             if exact == installed_version and cpe_update == '*':
                 return True
             release = vmware_release(version) if vmware_esxi else None
@@ -2685,6 +2697,22 @@ def cve_confidence(cve: dict, query: dict) -> str:
     ) else 'excluded'
 
 
+def primary_advisory_confidence(cve_id: str, query: dict) -> str:
+    """Apply a version range from an identified primary or national CERT advisory."""
+    key = (query.get('cpeVendor', '').lower(), query.get('cpeProduct', '').lower(), cve_id)
+    bounds = PRIMARY_ADVISORY_RANGES.get(key)
+    if not bounds:
+        return 'excluded'
+    lower, upper = bounds
+    version = query.get('version', '')
+    if lower:
+        compared = compare_versions(version, lower)
+        if compared is None or compared < 0:
+            return 'excluded'
+    compared = compare_versions(version, upper) if upper else -1
+    return 'confirmed' if compared is not None and compared < 0 else 'excluded'
+
+
 def collect(query: dict[str, str]) -> dict:
     use_cpe = bool(query["cpeVendor"] and query["cpeProduct"] and query["version"])
     if not use_cpe:
@@ -2700,14 +2728,21 @@ def collect(query: dict[str, str]) -> dict:
     method = "cpe"
     cpes = cpe_queries(query)
     def nvd_url(cpe: str, start: int = 0) -> str:
-        parameter = {"resultsPerPage": str(MAX_RESULTS), "startIndex": str(start),
-                     "isVulnerable": "", "cpeName": cpe}
+        parameter = {"resultsPerPage": str(MAX_RESULTS), "startIndex": str(start)}
+        # virtualMatchString accepts a valid partial CPE when the dictionary
+        # specializes target platform or build components absent from inventory.
+        parameter['virtualMatchString'] = re.sub(r'(?::\*)+$', '', cpe)
         return f"{NVD_API}?{urllib.parse.urlencode(parameter)}"
 
     candidates_by_id = {}
     nvd_total = 0
     for cpe in cpes:
-        nvd = fetch_json(nvd_url(cpe))
+        try:
+            nvd = fetch_json(nvd_url(cpe))
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            nvd = {'totalResults': 0, 'vulnerabilities': []}
         page_candidates = list(nvd.get("vulnerabilities", []))
         while len(page_candidates) < nvd.get("totalResults", 0):
             page = fetch_json(nvd_url(cpe, len(page_candidates)))
@@ -2720,6 +2755,11 @@ def collect(query: dict[str, str]) -> dict:
             if candidate.get('cve', {}).get('id'):
                 candidates_by_id[candidate['cve']['id']] = candidate
     candidates = list(candidates_by_id.values())
+    for (vendor, product, cve_id), _ in PRIMARY_ADVISORY_RANGES.items():
+        if vendor == query['cpeVendor'].lower() and product == query['cpeProduct'].lower() and cve_id not in candidates_by_id:
+            candidates.extend(fetch_json(
+                f"{NVD_API}?{urllib.parse.urlencode({'cveId': cve_id})}"
+            ).get('vulnerabilities', []))
 
     sources = [{
         "name": "NVD / NIST", "status": "online", "url": "https://nvd.nist.gov/",
@@ -2737,6 +2777,8 @@ def collect(query: dict[str, str]) -> dict:
         if not item.get('cve'):
             continue
         confidence = cve_confidence(item['cve'], query)
+        if confidence == 'excluded':
+            confidence = primary_advisory_confidence(item['cve'].get('id', ''), query)
         if confidence != 'excluded':
             vulnerabilities.append({**normalize_cve(item['cve'], kev), 'confidence': confidence})
     vulnerabilities.sort(key=lambda item: (bool(item["kev"]), item["score"] or 0), reverse=True)

@@ -42,9 +42,9 @@ export const vendorCatalog: VendorDefinition[] = [
         advisoryUrl: 'https://www.fortiguard.com/psirt',
       },
       {
-        id: 'forticlient-ssl-vpn', name: 'FortiVPN / FortiClient SSL VPN', family: 'VPN', part: 'a',
-        cpeVendor: 'fortinet', cpeProduct: 'forticlient_ssl_vpn',
-        versions: ['4.0.2012'],
+        id: 'forticlient-ssl-vpn', name: 'FortiVPN / FortiClient', family: 'VPN', part: 'a',
+        cpeVendor: 'fortinet', cpeProduct: 'forticlient',
+        versions: ['7.4.5', '7.4.4', '7.4.3', '7.4.2', '7.4.1', '7.4.0', '7.2.11', '7.2.10'],
         advisoryUrl: 'https://www.fortiguard.com/psirt',
       },
     ],
@@ -188,7 +188,7 @@ export const vendorCatalog: VendorDefinition[] = [
     id: 'microsoft', name: 'Microsoft', short: 'MS', products: [
       { id: 'windows-server', name: 'Windows Server', family: 'Système serveur', part: 'o', cpeVendor: 'microsoft', cpeProduct: 'windows_server_2022', versions: ['2025', '2022', '2019', '2016'], advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
       { id: 'defender-endpoint', name: 'Defender for Endpoint', family: 'EDR', part: 'a', versions: [], versionOptional: true, advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
-      { id: 'sql-server', name: 'Microsoft SQL Server', family: 'Base de données', part: 'a', cpeVendor: 'microsoft', cpeProduct: 'sql_server', versions: ['2022', '2019', '2017', '2016'], advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
+      { id: 'sql-server', name: 'Microsoft SQL Server', family: 'Base de données', part: 'a', cpeVendor: 'microsoft', cpeProduct: 'sql_server', versions: ['2025', '2022', '2019', '2017', '2016'], advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
     ],
   },
   {
