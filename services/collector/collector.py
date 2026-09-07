@@ -2593,10 +2593,17 @@ def vmware_release(value: str) -> tuple[str, str] | None:
     return (base, f'update_{number}{suffix}') if number else (base, '*')
 
 
+def canonical_cpe_version(vendor: str, product: str, version: str) -> str:
+    """Resolve documented product renames while retaining exact CPE matching."""
+    if vendor.lower() == 'oracle' and product.lower() == 'database_server' and version.lower() == '23c':
+        return '23ai'
+    return version
+
+
 def cpe_queries(query: dict[str, str]) -> list[str]:
     """Return exact structured CPE names used to retrieve NVD candidates."""
     identities = [(query['part'], query['cpeProduct'])]
-    versions = [(query['version'], '*')]
+    versions = [(canonical_cpe_version(query['cpeVendor'], query['cpeProduct'], query['version']), '*')]
     if query.get('cpeVendor', '').lower() == 'vmware' and query.get('cpeProduct', '').lower() in ('esxi', 'esx'):
         identities = [(part, product) for part in ('o', 'a') for product in ('esxi', 'esx')]
         release = vmware_release(query['version'])
@@ -2639,10 +2646,11 @@ def cve_confidence(cve: dict, query: dict) -> str:
             return False
         if any(f != '*' for f in fields[7:]):
             return False
+        installed_version = canonical_cpe_version(vendor, product, version)
         bounds = [(key, match[key]) for key in ('versionStartIncluding', 'versionStartExcluding', 'versionEndIncluding', 'versionEndExcluding') if key in match]
         if cpe_version not in ('*', '-'):
             exact = re.sub(r'\\(.)', r'\1', cpe_version).lower()
-            if exact == version and cpe_update == '*':
+            if exact == installed_version and cpe_update == '*':
                 return True
             release = vmware_release(version) if vmware_esxi else None
             return bool(release and exact == release[0]
@@ -2650,7 +2658,7 @@ def cve_confidence(cve: dict, query: dict) -> str:
         if cpe_version == '-' or not bounds:
             return False
         for key, bound in bounds:
-            compared = compare_versions(version, str(bound))
+            compared = compare_versions(installed_version, str(bound))
             if compared is None:
                 return False
             if (key == 'versionStartIncluding' and compared < 0

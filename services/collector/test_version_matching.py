@@ -49,6 +49,12 @@ class MatchingTests(unittest.TestCase):
         self.assertTrue(any(':o:vmware:esxi:7.0:update_3:' in item for item in queries))
         self.assertTrue(any(':a:vmware:esx:7.0:update_3:' in item for item in queries))
 
+    def test_oracle_23c_uses_the_verified_23ai_cpe_name(self):
+        oracle = dict(vendor='Oracle', product='Oracle Database', version='23c', part='a', cpeVendor='oracle', cpeProduct='database_server')
+        self.assertIn(':oracle:database_server:23ai:', collector.cpe_queries(oracle)[0])
+        match = dict(vulnerable=True, criteria='cpe:2.3:a:oracle:database_server:23ai:*:*:*:*:*:*:*')
+        self.assertEqual(collector.cve_confidence(cve(match), oracle), 'confirmed')
+
     def test_ambiguous_data_and_identity(self):
         for item in ({}, cve(entry(MAC)), cve(entry(MAC, versionEndExcluding='26.6.1-beta'))):
             self.assertEqual(collector.cve_confidence(item, MAC), 'excluded')

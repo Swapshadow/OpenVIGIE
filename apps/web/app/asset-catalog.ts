@@ -35,6 +35,18 @@ export const vendorCatalog: VendorDefinition[] = [
         versions: ['7.6.2', '7.4.5', '7.2.8', '7.0.13', '6.4.15'],
         advisoryUrl: 'https://www.fortiguard.com/psirt',
       },
+      {
+        id: 'fortipam', name: 'FortiPAM', family: 'Gestion des accès privilégiés', part: 'o',
+        cpeVendor: 'fortinet', cpeProduct: 'fortipam',
+        versions: ['1.9.1', '1.9.0', '1.8.4', '1.8.3', '1.8.2', '1.8.1', '1.8.0', '1.7.3', '1.7.2', '1.7.1', '1.7.0'],
+        advisoryUrl: 'https://www.fortiguard.com/psirt',
+      },
+      {
+        id: 'forticlient-ssl-vpn', name: 'FortiVPN / FortiClient SSL VPN', family: 'VPN', part: 'a',
+        cpeVendor: 'fortinet', cpeProduct: 'forticlient_ssl_vpn',
+        versions: ['4.0.2012'],
+        advisoryUrl: 'https://www.fortiguard.com/psirt',
+      },
     ],
   },
   {
@@ -73,6 +85,15 @@ export const vendorCatalog: VendorDefinition[] = [
         versions: ['10.7.0.0', '10.6.0.2', '8.12.0.3', '8.10.0.14'],
         advisoryUrl: 'https://support.hpe.com/connect/s/securitybulletinlibrary',
       },
+    ],
+  },
+  {
+    id: 'aruba-instant-on',
+    name: 'Aruba Instant On',
+    short: 'IO',
+    products: [
+      { id: '1930-8g', name: 'Instant On 1930 8G 2SFP', family: 'Commutation', part: 'o', cpeVendor: 'hpe', cpeProduct: 'aruba_instant_on_1930_8g_2sfp_firmware', versions: ['1.0.7.0'], advisoryUrl: 'https://instanton.hpe.com/techdocs/en/content/get-started/Sites/security.htm' },
+      { id: '1930-8g-poe', name: 'Instant On 1930 8G PoE 2SFP 124W', family: 'Commutation', part: 'o', cpeVendor: 'hpe', cpeProduct: 'aruba_instant_on_1930_8g_class4_poe_2sfp_124w_firmware', versions: ['1.0.7.0'], advisoryUrl: 'https://instanton.hpe.com/techdocs/en/content/get-started/Sites/security.htm' },
     ],
   },
   {
@@ -167,6 +188,14 @@ export const vendorCatalog: VendorDefinition[] = [
     id: 'microsoft', name: 'Microsoft', short: 'MS', products: [
       { id: 'windows-server', name: 'Windows Server', family: 'Système serveur', part: 'o', cpeVendor: 'microsoft', cpeProduct: 'windows_server_2022', versions: ['2025', '2022', '2019', '2016'], advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
       { id: 'defender-endpoint', name: 'Defender for Endpoint', family: 'EDR', part: 'a', versions: [], versionOptional: true, advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
+      { id: 'sql-server', name: 'Microsoft SQL Server', family: 'Base de données', part: 'a', cpeVendor: 'microsoft', cpeProduct: 'sql_server', versions: ['2022', '2019', '2017', '2016'], advisoryUrl: 'https://msrc.microsoft.com/update-guide/' },
+    ],
+  },
+  {
+    id: 'hpe-simplivity', name: 'HPE SimpliVity', short: 'SV', products: [
+      { id: 'omnistack-cisco', name: 'SimpliVity OmniStack for Cisco', family: 'Infrastructure hyperconvergée', part: 'o', cpeVendor: 'hp', cpeProduct: 'simplivity_omnistack_for_cisco_firmware', versions: ['3.7.9', '3.5.2', '3.0.8'], advisoryUrl: 'https://support.hpe.com/connect/s/securitybulletinlibrary' },
+      { id: 'omnistack-dell', name: 'SimpliVity OmniStack for Dell', family: 'Infrastructure hyperconvergée', part: 'o', cpeVendor: 'hp', cpeProduct: 'simplivity_omnistack_for_dell_firmware', versions: ['3.0.8'], advisoryUrl: 'https://support.hpe.com/connect/s/securitybulletinlibrary' },
+      { id: 'omnistack-lenovo', name: 'SimpliVity OmniStack for Lenovo', family: 'Infrastructure hyperconvergée', part: 'o', cpeVendor: 'hp', cpeProduct: 'simplivity_omnistack_for_lenovo_firmware', versions: ['3.7.9', '3.5.2', '3.0.8'], advisoryUrl: 'https://support.hpe.com/connect/s/securitybulletinlibrary' },
     ],
   },
   {
@@ -479,13 +508,19 @@ export const vendorCatalog: VendorDefinition[] = [
   },
   {
     id: 'oracle-mysql',
-    name: 'Oracle MySQL',
+    name: 'Oracle',
     short: 'MY',
     products: [
       {
         id: 'mysql', name: 'MySQL Server', family: 'Base de données', part: 'a',
         cpeVendor: 'oracle', cpeProduct: 'mysql',
         versions: ['9.5.0', '9.3.0', '9.2.0', '9.1.0', '9.0.1', '9.0.0', '8.4.7', '8.4.5', '8.4.4', '8.4.2', '8.4.0', '8.3.0'],
+        advisoryUrl: 'https://www.oracle.com/security-alerts/',
+      },
+      {
+        id: 'database-server', name: 'Oracle Database', family: 'Base de données', part: 'a',
+        cpeVendor: 'oracle', cpeProduct: 'database_server',
+        versions: ['23c', '21c', '19c'],
         advisoryUrl: 'https://www.oracle.com/security-alerts/',
       },
     ],
