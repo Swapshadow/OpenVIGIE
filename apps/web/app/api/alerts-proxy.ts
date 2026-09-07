@@ -5,7 +5,11 @@ export async function proxyAlerts(request: Request, path: string) {
   if (!base) return NextResponse.json({ error: 'Le collecteur doit être configuré pour les alertes.' }, { status: 503 });
   if (request.method !== 'GET') {
     const origin = request.headers.get('origin');
-    if ((origin && origin !== new URL(request.url).origin) || request.headers.get('sec-fetch-site') === 'cross-site') {
+    const allowedOrigins = new Set([new URL(request.url).origin]);
+    for (const value of (process.env.OPENVIGIE_PUBLIC_ORIGINS ?? '').split(',')) {
+      try { allowedOrigins.add(new URL(value.trim()).origin); } catch { /* Ignore invalid configuration. */ }
+    }
+    if ((origin && !allowedOrigins.has(origin)) || request.headers.get('sec-fetch-site') === 'cross-site') {
       return NextResponse.json({ error: 'Origine non autorisée.' }, { status: 403 });
     }
     if (request.headers.get('content-type')?.split(';')[0] !== 'application/json') {

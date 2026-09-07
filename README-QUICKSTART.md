@@ -104,3 +104,63 @@ docker pull swapshadow/openvigie-collector:latest
 ---
 
 **Version**: 1.0.0 | **Modèle IA**: Mistral 7B Instruct (local)
+
+
+## HTTPS local renouvelé automatiquement (Caddy)
+
+`docker compose up -d --build` démarre aussi Caddy. Utilisez **https://localhost**
+ou **https://127.0.0.1**. **http://localhost:3000 reste disponible en parallèle**.
+Le port HTTPS est lié uniquement à 127.0.0.1. Si le port 443 est occupé, définissez
+`OPENVIGIE_HTTPS_PORT=8443` dans `.env`, puis utilisez `https://localhost:8443`.
+Les noms et adresses du réseau local ne sont pas couverts par cette configuration.
+Le même service est inclus dans `docker-compose.prod.yml`.
+
+Caddy utilise `tls internal` : il crée une autorité locale, puis renouvelle les
+certificats du site et son intermédiaire automatiquement pendant son fonctionnement.
+Aucun certificat du site à recréer manuellement, aucune dépendance à une autorité
+publique ou à une validation DNS. Les volumes `openvigie_caddy_data` et
+`openvigie_caddy_config` conservent l’identité TLS entre les redémarrages.
+Ne supprimez pas ces volumes pendant les mises à jour.
+
+### Faire confiance à l’autorité locale une seule fois
+
+Un navigateur ne fait pas confiance par défaut à une autorité créée dans Docker.
+Exportez **uniquement le certificat public racine**, jamais les clés privées :
+
+```bash
+mkdir -p .local
+docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .local/caddy-root.crt
+```
+
+Sous PowerShell, utilisez `New-Item -ItemType Directory -Force .local` à la place
+de `mkdir -p`. Installez ensuite ce certificat dans le magasin de confiance :
+
+- Windows (utilisateur courant, sans administrateur) :
+  `Import-Certificate -FilePath .local/caddy-root.crt -CertStoreLocation Cert:\CurrentUser\Root`
+- macOS : importez `.local/caddy-root.crt` dans Trousseaux d’accès et faites
+  confiance à cette autorité pour SSL.
+- Linux Debian/Ubuntu : copiez-le dans
+  `/usr/local/share/ca-certificates/openvigie-local.crt`, puis exécutez
+  `sudo update-ca-certificates`.
+- Firefox peut nécessiter un import dans son propre magasin d’autorités.
+
+Cette confiance initiale est indépendante des renouvellements automatiques des
+certificats du site. Si vous supprimez le volume Caddy, une nouvelle autorité sera
+créée et devra être approuvée à nouveau. La racine a elle-même une durée de vie
+longue et finie : son remplacement exceptionnel nécessitera une nouvelle confiance.
+Ne distribuez pas le volume contenant sa clé privée.
+
+### Vérifications
+
+```bash
+docker compose config --quiet
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+curl --cacert .local/caddy-root.crt https://localhost/api/notifications
+curl http://localhost:3000/api/notifications
+```
+
+En cas de refus d’une écriture HTTPS dans les paramètres, vérifiez que le service
+web a été recréé : `OPENVIGIE_PUBLIC_ORIGINS` autorise explicitement les deux
+origines HTTPS locales et le port choisi. Les origines étrangères restent refusées.
+Les certificats ne sont pas versionnés. Documentation Caddy :
+https://caddyserver.com/docs/automatic-https#local-https.

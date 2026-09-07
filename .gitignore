@@ -8,3 +8,6 @@ __pycache__/
 
 # TypeScript incremental cache
 *.tsbuildinfo
+
+# Local certificate export (private CA keys stay inside Docker volumes)
+.local/

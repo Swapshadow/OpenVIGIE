@@ -1,6 +1,19 @@
 name: openvigie
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "127.0.0.1:${OPENVIGIE_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - openvigie_caddy_data:/data
+      - openvigie_caddy_config:/config
+    depends_on:
+      web:
+        condition: service_started
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama:latest
     environment:
@@ -62,6 +75,7 @@ services:
       NODE_ENV: production
       NVD_API_KEY: ${NVD_API_KEY:-}
       OPENVIGIE_COLLECTOR_URL: http://collector:8787
+      OPENVIGIE_PUBLIC_ORIGINS: https://localhost:${OPENVIGIE_HTTPS_PORT:-443},https://127.0.0.1:${OPENVIGIE_HTTPS_PORT:-443}
     depends_on:
       collector:
         condition: service_healthy
@@ -70,3 +84,5 @@ services:
 volumes:
   openvigie_data:
   openvigie_ollama:
+  openvigie_caddy_data:
+  openvigie_caddy_config:

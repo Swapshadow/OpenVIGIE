@@ -1,6 +1,19 @@
 version: '3.9'
 
 services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "127.0.0.1:${OPENVIGIE_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - openvigie_caddy_data:/data
+      - openvigie_caddy_config:/config
+    depends_on:
+      web:
+        condition: service_started
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama:latest
     environment:
@@ -60,6 +73,7 @@ services:
     environment:
       NODE_ENV: production
       OPENVIGIE_COLLECTOR_URL: http://collector:8787
+      OPENVIGIE_PUBLIC_ORIGINS: https://localhost:${OPENVIGIE_HTTPS_PORT:-443},https://127.0.0.1:${OPENVIGIE_HTTPS_PORT:-443}
     ports:
       - "0.0.0.0:3000:3000"
     depends_on:
@@ -77,3 +91,5 @@ volumes:
     driver: local
   openvigie_ollama:
     driver: local
+  openvigie_caddy_data:
+  openvigie_caddy_config:

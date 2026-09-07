@@ -1,0 +1,10 @@
+{
+	auto_https disable_redirects
+}
+
+https://localhost, https://127.0.0.1 {
+	tls internal
+	reverse_proxy web:3000 {
+		flush_interval -1
+	}
+}
