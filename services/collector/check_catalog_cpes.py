@@ -1,7 +1,6 @@
 """Verify newly catalogued identities against the official NVD CPE dictionary."""
 import json
 import time
-import urllib.parse
 
 import collector
 
@@ -20,20 +19,10 @@ PRODUCTS = {
 
 
 def cpe_versions(part, vendor, product):
-    pattern = f'cpe:2.3:{part}:{vendor}:{product}:*:*:*:*:*:*:*:*'
-    url = 'https://services.nvd.nist.gov/rest/json/cpes/2.0?' + urllib.parse.urlencode({
-        'cpeMatchString': pattern, 'resultsPerPage': 100,
-    })
-    payload = collector.fetch_json(url)
-    rows = list(payload.get('products', []))
-    while len(rows) < payload.get('totalResults', 0):
-        page_url = url + '&' + urllib.parse.urlencode({'startIndex': len(rows)})
-        page = collector.fetch_json(page_url)
-        batch = page.get('products', [])
-        if not batch:
-            raise AssertionError(f'pagination CPE incomplète pour {vendor}:{product}')
-        rows.extend(batch)
-    return {row['cpe']['cpeName'].split(':')[5] for row in rows}
+    # Delegate to the collector so alias identities (SQL Server release families,
+    # VMware ESXi part/product variants) are resolved exactly as in production
+    # rather than re-implemented and drifting out of sync.
+    return set(collector.fetch_dictionary_versions(part, vendor, product))
 
 
 def main():
