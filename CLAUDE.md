@@ -297,6 +297,15 @@ ni la liste CVE du parc, ni sa matrice, ni Vigi, ni les notifications ou emails.
 Les articles liés à un équipement ne le sont que par intersection avec un identifiant
 CVE déjà confirmé par la règle CPE ci-dessus.
 
+## Règle de non-régression : shell et navigation persistants
+
+La topbar et la sidebar de navigation sont montées exactement une fois par le
+layout racine dans `apps/web/app/layout.tsx`, via `AppShell`. Une vue locale
+(bulletin, fuites, parc ou paramètres) ne doit jamais recréer, remplacer ou
+démonter ce shell. Les actions internes, notamment l’ajout ou la suppression
+d’un équipement, ne modifient que l’état de leur vue. Toute navigation interne
+passe par l’état du shell persistant et ne recharge pas le document.
+
 Sans `cpeVendor`, `cpeProduct` et version fiables, afficher exactement :
 « Pas de correspondance CPE fiable — recherche manuelle recommandée » et une liste
 CVE vide. Un changement de politique doit purger les instantanés et désactiver les
