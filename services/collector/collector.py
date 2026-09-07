@@ -2579,7 +2579,34 @@ def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
     return enriched
 
 
-MATCHING_POLICY = 3
+MATCHING_POLICY = 4
+
+
+def vmware_release(value: str) -> tuple[str, str] | None:
+    """Map UI and dotted VMware releases to CPE version/update components."""
+    normalized = value.strip().lower().replace('_', ' ')
+    match = re.fullmatch(r'(\d+\.\d+)(?:\.(\d+)|\s+(?:u|update\s*)(\d+))([a-z]?)', normalized)
+    if not match:
+        return None
+    base, update, named_update, suffix = match.groups()
+    number = update or named_update
+    return (base, f'update_{number}{suffix}') if number else (base, '*')
+
+
+def cpe_queries(query: dict[str, str]) -> list[str]:
+    """Return exact structured CPE names used to retrieve NVD candidates."""
+    identities = [(query['part'], query['cpeProduct'])]
+    versions = [(query['version'], '*')]
+    if query.get('cpeVendor', '').lower() == 'vmware' and query.get('cpeProduct', '').lower() in ('esxi', 'esx'):
+        identities = [(part, product) for part in ('o', 'a') for product in ('esxi', 'esx')]
+        release = vmware_release(query['version'])
+        if release:
+            versions.append(release)
+    return list(dict.fromkeys(
+        f"cpe:2.3:{part}:{cpe_component(query['cpeVendor'])}:{cpe_component(product)}:"
+        f"{cpe_component(version)}:{cpe_component(update)}:*:*:*:*:*:*"
+        for part, product in identities for version, update in versions
+    ))
 
 
 def compare_versions(left: str, right: str) -> int | None:
@@ -2603,17 +2630,23 @@ def cve_confidence(cve: dict, query: dict) -> str:
         fields = re.split(r'(?<!\\):', match.get('criteria', ''))
         if len(fields) != 13 or fields[:2] != ['cpe', '2.3']:
             return False
-        part, cpe_vendor, cpe_product, cpe_version = fields[2:6]
-        identity = (part == query.get('part', 'a') and cpe_vendor.lower() == vendor
-                    and cpe_product.lower() == product)
+        part, cpe_vendor, cpe_product, cpe_version, cpe_update = fields[2:7]
+        vmware_esxi = vendor == 'vmware' and product in ('esxi', 'esx')
+        identity = (cpe_vendor.lower() == vendor
+                    and (cpe_product.lower() == product and part == query.get('part', 'a')
+                         or vmware_esxi and cpe_product.lower() in ('esxi', 'esx') and part in ('o', 'a')))
         if not identity or match.get('vulnerable') is not True:
             return False
-        if any(f != '*' for f in fields[6:]):
+        if any(f != '*' for f in fields[7:]):
             return False
         bounds = [(key, match[key]) for key in ('versionStartIncluding', 'versionStartExcluding', 'versionEndIncluding', 'versionEndExcluding') if key in match]
         if cpe_version not in ('*', '-'):
             exact = re.sub(r'\\(.)', r'\1', cpe_version).lower()
-            return exact == version
+            if exact == version and cpe_update == '*':
+                return True
+            release = vmware_release(version) if vmware_esxi else None
+            return bool(release and exact == release[0]
+                        and (cpe_update == release[1] or cpe_update.startswith(release[1]) and release[1] != '*'))
         if cpe_version == '-' or not bounds:
             return False
         for key, bound in bounds:
@@ -2657,25 +2690,28 @@ def collect(query: dict[str, str]) -> dict:
             "cached": False, "sources": [],
         }
     method = "cpe"
-    cpe = ""
-    if use_cpe:
-        cpe = (
-            f"cpe:2.3:{query['part']}:{cpe_component(query['cpeVendor'])}:"
-            f"{cpe_component(query['cpeProduct'])}:{cpe_component(query['version'])}:*:*:*:*:*:*:*"
-        )
-    def nvd_url(start: int = 0) -> str:
+    cpes = cpe_queries(query)
+    def nvd_url(cpe: str, start: int = 0) -> str:
         parameter = {"resultsPerPage": str(MAX_RESULTS), "startIndex": str(start),
                      "isVulnerable": "", "cpeName": cpe}
         return f"{NVD_API}?{urllib.parse.urlencode(parameter)}"
 
-    nvd = fetch_json(nvd_url())
-    candidates = list(nvd.get("vulnerabilities", []))
-    while len(candidates) < nvd.get("totalResults", 0):
-        page = fetch_json(nvd_url(len(candidates)))
-        batch = page.get("vulnerabilities", [])
-        if not batch:
-            raise RuntimeError("Pagination NVD incomplète")
-        candidates.extend(batch)
+    candidates_by_id = {}
+    nvd_total = 0
+    for cpe in cpes:
+        nvd = fetch_json(nvd_url(cpe))
+        page_candidates = list(nvd.get("vulnerabilities", []))
+        while len(page_candidates) < nvd.get("totalResults", 0):
+            page = fetch_json(nvd_url(cpe, len(page_candidates)))
+            batch = page.get("vulnerabilities", [])
+            if not batch:
+                raise RuntimeError("Pagination NVD incomplète")
+            page_candidates.extend(batch)
+        nvd_total += nvd.get("totalResults", len(page_candidates))
+        for candidate in page_candidates:
+            if candidate.get('cve', {}).get('id'):
+                candidates_by_id[candidate['cve']['id']] = candidate
+    candidates = list(candidates_by_id.values())
 
     sources = [{
         "name": "NVD / NIST", "status": "online", "url": "https://nvd.nist.gov/",
@@ -2698,10 +2734,10 @@ def collect(query: dict[str, str]) -> dict:
     vulnerabilities.sort(key=lambda item: (bool(item["kev"]), item["score"] or 0), reverse=True)
     return {
         "asset": {"vendor": query["vendor"], "product": query["product"], "version": query["version"]},
-        "matching": {"method": method, "confidence": "high", "query": cpe},
+        "matching": {"method": method, "confidence": "high", "query": cpes[0], "queries": cpes},
         "vulnerabilities": vulnerabilities,
         "totalResults": len(vulnerabilities),
-        "nvdTotalResults": nvd.get("totalResults", len(candidates)),
+        "nvdTotalResults": nvd_total,
         "matchingPolicy": MATCHING_POLICY,
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "cached": False,

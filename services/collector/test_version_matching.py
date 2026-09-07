@@ -5,6 +5,7 @@ import collector
 
 MAC = dict(vendor='Apple', product='macOS', version='26.6.1', part='o', cpeVendor='apple', cpeProduct='macos')
 FORTI = dict(vendor='Fortinet', product='FortiOS / FortiGate', version='7.6.3', part='o', cpeVendor='fortinet', cpeProduct='fortios')
+VMWARE = dict(vendor='VMware by Broadcom', product='VMware ESXi', version='7.0.3', part='o', cpeVendor='vmware', cpeProduct='esxi')
 
 def entry(query, version='*', **bounds):
     return dict(vulnerable=True, criteria=f"cpe:2.3:o:{query['cpeVendor']}:{query['cpeProduct']}:{version}:*:*:*:*:*:*:*", **bounds)
@@ -35,6 +36,18 @@ class MatchingTests(unittest.TestCase):
         item = cve(entry(MAC, '26.6.1'), entry(FORTI, versionStartIncluding='7.6.0', versionEndIncluding='7.6.3'))
         item['configurations'].insert(0, {'nodes': [{'cpeMatch': [entry(MAC, '15.0')]}]})
         self.assertEqual(collector.cve_confidence(item, FORTI), 'confirmed')
+
+    def test_vmware_esxi_alias_part_and_update_normalization(self):
+        matches = [
+            dict(vulnerable=True, criteria='cpe:2.3:a:vmware:esx:7.0:update_3r:*:*:*:*:*:*'),
+            dict(vulnerable=True, criteria='cpe:2.3:o:vmware:esxi:8.0:update_3:*:*:*:*:*:*'),
+        ]
+        self.assertEqual(collector.vmware_release('7.0.3'), ('7.0', 'update_3'))
+        self.assertEqual(collector.vmware_release('8.0 U3'), ('8.0', 'update_3'))
+        self.assertEqual(collector.cve_confidence(cve(*matches), VMWARE), 'confirmed')
+        queries = collector.cpe_queries(VMWARE)
+        self.assertTrue(any(':o:vmware:esxi:7.0:update_3:' in item for item in queries))
+        self.assertTrue(any(':a:vmware:esx:7.0:update_3:' in item for item in queries))
 
     def test_ambiguous_data_and_identity(self):
         for item in ({}, cve(entry(MAC)), cve(entry(MAC, versionEndExcluding='26.6.1-beta'))):

@@ -109,13 +109,13 @@ export const vendorCatalog: VendorDefinition[] = [
       {
         id: 'esxi', name: 'VMware ESXi', family: 'Virtualisation', part: 'o',
         cpeVendor: 'vmware', cpeProduct: 'esxi',
-        versions: ['8.0.3', '8.0.2', '8.0.1', '7.0.3'],
+        versions: ['8.0 U3', '8.0 U2', '8.0 U1', '7.0 U3', '7.0 U2', '7.0 U1', '8.0.3', '7.0.3'],
         advisoryUrl: 'https://support.broadcom.com/web/ecx/security-advisory',
       },
       {
         id: 'vcenter', name: 'vCenter Server', family: 'Virtualisation', part: 'a',
         cpeVendor: 'vmware', cpeProduct: 'vcenter_server',
-        versions: ['8.0.3', '8.0.2', '7.0.3'],
+        versions: ['8.0', '8.0.3', '8.0.2', '7.0', '7.0.3'],
         advisoryUrl: 'https://support.broadcom.com/web/ecx/security-advisory',
       },
     ],
