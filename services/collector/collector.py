@@ -552,6 +552,28 @@ def initialize_database() -> None:
         # separately classified alert and advisory feeds.
         connection.execute("DELETE FROM feed_runs WHERE source_id = 'cert-fr'")
         connection.execute("DELETE FROM articles WHERE source_id = 'cert-fr'")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS collector_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        policy = connection.execute(
+            "SELECT value FROM collector_metadata WHERE key = 'cve_matching_policy'"
+        ).fetchone()
+        if not policy or policy["value"] != str(MATCHING_POLICY):
+            # Old snapshots may contain keyword or wildcard-version matches. Do
+            # not serve them as stale data while NVD is being queried again.
+            connection.execute(
+                "UPDATE monitored_queries SET payload_json=NULL, next_refresh=0, last_error=NULL"
+            )
+            connection.execute(
+                "UPDATE notifications SET confidence='excluded', email_sent=1"
+            )
+            connection.execute(
+                "UPDATE detection_cycles SET email_sent=1 WHERE email_sent=0"
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO collector_metadata(key,value) VALUES('cve_matching_policy',?)",
+                (str(MATCHING_POLICY),),
+            )
 
 
 def validate_text(value: str, maximum: int) -> str:
@@ -1766,7 +1788,8 @@ def build_ai_triage(cadence: str, limit: int, assets: list[dict]) -> dict:
     for raw in assets[:100]:
         if isinstance(raw, dict):
             safe_assets.append({key: clean_excerpt(str(raw.get(key, "")), 120) for key in
-                                ("id", "label", "vendor", "product", "version", "exposure")})
+                                ("id", "label", "vendor", "product", "version", "exposure",
+                                 "part", "cpeVendor", "cpeProduct")})
     evidence = [{
         "id": item["id"], "title": item["title"], "excerpt": item["excerpt"],
         "publishedAt": item["publishedAt"], "categoryRule": item["category"],
@@ -1800,17 +1823,19 @@ def build_ai_triage(cadence: str, limit: int, assets: list[dict]) -> dict:
         kev, kev_status = get_kev(), "online"
     except Exception:
         kev, kev_status = {}, "degraded"
+    strict_cves_by_asset = {
+        asset["id"]: {item["id"] for item in (_asset_verified_snapshot(asset) or [])}
+        for asset in safe_assets
+    }
     triage, matrix = [], []
     for article in articles:
         ai = ai_by_id.get(article["id"], {})
-        text = normalized_search_text(f"{article['title']} {article['excerpt']}")
-        asset_hits = []
-        for asset in safe_assets:
-            vendor, product = normalized_search_text(asset["vendor"]), normalized_search_text(asset["product"])
-            version = normalized_search_text(asset["version"])
-            if product and product in text and (not vendor or vendor in text):
-                asset_hits.append({**asset, "versionMentioned": bool(version and version in text)})
         cves = article["cves"]
+        asset_hits = [
+            {**asset, "versionMentioned": False}
+            for asset in safe_assets
+            if set(cves).intersection(strict_cves_by_asset.get(asset["id"], set()))
+        ]
         kev_cves = [cve for cve in cves if cve in kev]
         try:
             ai_priority = min(100, max(0, int(ai.get("priorityAi", 0) or 0)))
@@ -1867,13 +1892,12 @@ VIGI_SYSTEM = (
     "règles factuelles (jamais par toi) et prime toujours sur ton propre jugement. Un "
     "équipement dans 'affected' avec verified=true vient de l'analyse NVD/CISA KEV "
     "exacte déjà affichée sur la page Mon parc : affirme sans réserve qu'il est "
-    "affecté, cite ses CVE et précise s'il est dans le catalogue CISA KEV. Avec "
-    "verified=false, ce n'est qu'un signal du bulletin des 30 derniers jours, moins "
-    "fiable : formule-le avec cette réserve et invite à vérifier dans Mon parc. Un "
+    "affecté, cite ses CVE et précise s'il est dans le catalogue CISA KEV. Aucun "
+    "article ou texte libre ne peut créer une association entre CVE et équipement. Un "
     "équipement dans 'notAffectedSample' a été vérifié via Mon parc et n'a aucune CVE "
     "connue : dis-le clairement, c'est un fait vérifié. Un équipement dans "
-    "'unverifiedSample' n'a jamais été analysé dans Mon parc et n'apparaît pas non "
-    "plus dans le bulletin : ne dis jamais qu'il n'est pas affecté, dis explicitement "
+    "'unverifiedSample' n'a pas d'instantané CPE strict disponible : ne dis jamais "
+    "qu'il n'est pas affecté, dis explicitement "
     "que ce n'est pas encore vérifié et invite à l'ouvrir dans Mon parc. Si le "
     "contexte ne permet pas de conclure, dis-le explicitement et oriente vers la "
     "bonne section d'OpenVigie (Le Bulletin, Mon parc, Plan de veille, Recherche "
@@ -1898,13 +1922,6 @@ def _vigi_wants_bulletin(text: str) -> bool:
     """True when the user's question should be grounded on the live bulletin."""
     needle = normalized_search_text(text)
     return any(hint in needle for hint in VIGI_CONTEXT_HINTS)
-
-
-def _asset_matches_text(text: str, asset: dict) -> bool:
-    """Same rule as the asset-risk matrix: product (+ vendor when present) in text."""
-    vendor = normalized_search_text(asset.get("vendor", ""))
-    product = normalized_search_text(asset.get("product", ""))
-    return bool(product) and product in text and (not vendor or vendor in text)
 
 
 def _asset_cache_key(asset: dict) -> str | None:
@@ -1951,52 +1968,18 @@ def _asset_verified_snapshot(asset: dict) -> list[dict] | None:
 
 def correlate_assets(safe_assets: list[dict]) -> dict:
     """Ground Vigi's "is my parc affected" answers in facts, never a guess.
-    Priority order per CLAUDE.md (rules always outrank the model):
-      1. The exact NVD/CISA KEV snapshot already computed for "Mon parc" —
-         same cache, same cache_key, so Vigi can never contradict what the
-         user just saw there.
-      2. For an asset never opened in "Mon parc" yet (no snapshot cached), a
-         weaker bulletin text-match signal, explicitly marked unverified.
-      3. Otherwise: unverified — say so, never silently claim "not affected"."""
+    Only the strict CPE/version snapshot computed for "Mon parc" may associate
+    a CVE with an asset. An asset without that snapshot stays unverified."""
     if not safe_assets:
         return {
             "totalDeclared": 0, "affected": [], "notAffectedCount": 0,
             "notAffectedSample": [], "unverifiedCount": 0, "unverifiedSample": [],
         }
-    try:
-        kev = get_kev()
-    except Exception:
-        kev = {}
-
     verified: dict[int, list[dict]] = {}
-    unchecked_indexes: list[int] = []
     for index, asset in enumerate(safe_assets):
         snapshot = _asset_verified_snapshot(asset)
         if snapshot is not None:
             verified[index] = snapshot
-        else:
-            unchecked_indexes.append(index)
-
-    # Bulletin fallback only for assets "Mon parc" has not queried yet.
-    bulletin_hits: dict[int, dict] = {}
-    if unchecked_indexes:
-        bulletin = build_bulletin("monthly", 150)
-        for article in bulletin["articles"]:
-            cves = article["cves"]
-            if not cves:
-                continue
-            text = normalized_search_text(f"{article['title']} {article['excerpt']}")
-            for index in unchecked_indexes:
-                if not _asset_matches_text(text, safe_assets[index]):
-                    continue
-                entry = bulletin_hits.setdefault(index, {"cves": set(), "kevCves": set(), "articles": []})
-                entry["cves"].update(cves)
-                entry["kevCves"].update(cve for cve in cves if cve in kev)
-                if len(entry["articles"]) < 3:
-                    entry["articles"].append({
-                        "title": article["title"], "url": article["url"],
-                        "source": article["source"]["name"], "cves": cves,
-                    })
 
     affected, not_affected_labels, unverified_labels = [], [], []
     for index, asset in enumerate(safe_assets):
@@ -2012,14 +1995,6 @@ def correlate_assets(safe_assets: list[dict]) -> dict:
                 })
             else:
                 not_affected_labels.append(label[:60])
-        elif index in bulletin_hits:
-            entry = bulletin_hits[index]
-            affected.append({
-                "label": label, "vendor": asset["vendor"], "product": asset["product"],
-                "version": asset["version"], "kev": bool(entry["kevCves"]), "verified": False,
-                "cves": sorted(entry["cves"])[:8], "kevCves": sorted(entry["kevCves"]),
-                "articles": entry["articles"],
-            })
         else:
             unverified_labels.append(label[:60])
     affected.sort(key=lambda item: (item["verified"], item["kev"], len(item["cves"])), reverse=True)
@@ -2563,17 +2538,8 @@ def normalize_cve(cve: dict, kev: dict[str, dict]) -> dict:
 
 
 def related_articles(query: dict[str, str], vulnerabilities: list[dict]) -> list[dict]:
-    """Correlate the monitored asset with recent attributed bulletin entries."""
+    """Attach articles only through CVE IDs already confirmed by strict CPE matching."""
     cve_ids = {item["id"] for item in vulnerabilities if item.get("id")}
-    raw_terms = " ".join((
-        query.get("vendor", ""), query.get("product", ""),
-        query.get("cpeVendor", "").replace("_", " "),
-        query.get("cpeProduct", "").replace("_", " "),
-    ))
-    terms = {
-        term for term in re.findall(r"[a-z0-9][a-z0-9.+-]{2,}", normalized_search_text(raw_terms))
-        if term not in GENERIC_ASSET_TERMS and len(term) >= 4
-    }
     with database_lock, connect() as connection:
         rows = connection.execute(
             "SELECT * FROM articles WHERE published_at >= ? ORDER BY published_at DESC LIMIT 600",
@@ -2584,18 +2550,14 @@ def related_articles(query: dict[str, str], vulnerabilities: list[dict]) -> list
     for row in rows:
         article_cves = set(json.loads(row["cves_json"] or "[]"))
         shared_cves = sorted(cve_ids.intersection(article_cves))
-        searchable = normalized_search_text(f"{row['title']} {row['summary']}")
-        matching_terms = sorted(term for term in terms if term in searchable)
-        if not shared_cves and not matching_terms:
+        if not shared_cves:
             continue
-        score = len(shared_cves) * 100 + len(matching_terms) * 10
+        score = len(shared_cves) * 100
         if row["source_id"] == "cert-fr-alertes":
             score += 35
         elif row["source_id"] == "cert-fr-avis":
             score += 25
-        if query.get("version") and query["version"].lower() in searchable:
-            score += 8
-        reasons = [*shared_cves[:3], *matching_terms[:3]]
+        reasons = shared_cves[:3]
         matches.append((score, row, reasons))
     matches.sort(key=lambda item: (item[0], item[1]["published_at"]), reverse=True)
     return [{
@@ -2610,12 +2572,13 @@ def related_articles(query: dict[str, str], vulnerabilities: list[dict]) -> list
 def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
     enriched = dict(payload)
     if payload.get('matchingPolicy') != MATCHING_POLICY:
-        enriched['vulnerabilities'] = [{**item, 'confidence': 'low_confidence'} for item in payload.get('vulnerabilities', [])]
-    enriched["relatedArticles"] = related_articles(query, payload.get("vulnerabilities", []))
+        enriched['vulnerabilities'] = []
+        enriched['totalResults'] = 0
+    enriched["relatedArticles"] = related_articles(query, enriched.get("vulnerabilities", []))
     return enriched
 
 
-MATCHING_POLICY = 2
+MATCHING_POLICY = 3
 
 
 def compare_versions(left: str, right: str) -> int | None:
@@ -2630,104 +2593,79 @@ def compare_versions(left: str, right: str) -> int | None:
 
 
 def cve_confidence(cve: dict, query: dict) -> str:
-    """Evaluate NVD applicability with three-valued AND/OR logic.
-
-    Unknown environment conditions, negation, unspecified ranges and unsupported
-    version formats never establish confirmed applicability to the asset.
-    """
+    """Confirm only an exact structured CPE whose explicit version covers the asset."""
     if cve.get('vulnStatus') == 'Rejected':
         return 'excluded'
     vendor, product, version = (query.get(k, '').lower() for k in ('cpeVendor', 'cpeProduct', 'version'))
     if not vendor or not product or not version or not cve.get('configurations'):
-        return 'low_confidence'
-
-    def product_name(name):
-        return 'macos' if vendor == 'apple' and name == 'mac_os_x' else name
+        return 'excluded'
 
     def leaf(match):
         fields = re.split(r'(?<!\\):', match.get('criteria', ''))
         if len(fields) != 13 or fields[:2] != ['cpe', '2.3']:
-            return None, True
+            return False
         part, cpe_vendor, cpe_product, cpe_version = fields[2:6]
         identity = (part == query.get('part', 'a') and cpe_vendor.lower() == vendor
-                    and product_name(cpe_product.lower()) == product_name(product))
-        if not identity:
-            # A non-vulnerable environmental prerequisite cannot be inferred
-            # from this single product/version query (e.g. hardware + OS).
-            return None, False
-        if match.get('vulnerable') is not True:
-            return None, False
-        uncertain = any(f != '*' for f in fields[6:])
+                    and cpe_product.lower() == product)
+        if not identity or match.get('vulnerable') is not True:
+            return False
+        if any(f != '*' for f in fields[6:]):
+            return False
         bounds = [(key, match[key]) for key in ('versionStartIncluding', 'versionStartExcluding', 'versionEndIncluding', 'versionEndExcluding') if key in match]
         if cpe_version not in ('*', '-'):
             exact = re.sub(r'\\(.)', r'\1', cpe_version).lower()
-            if exact != version:
-                compared = compare_versions(version, exact)
-                if compared is None:
-                    return None, True
-                if compared != 0:
-                    return False, True
-        elif cpe_version == '-' or not bounds:
-            uncertain = True
+            return exact == version
+        if cpe_version == '-' or not bounds:
+            return False
         for key, bound in bounds:
             compared = compare_versions(version, str(bound))
             if compared is None:
-                uncertain = True
-                continue
+                return False
             if (key == 'versionStartIncluding' and compared < 0
                     or key == 'versionStartExcluding' and compared <= 0
                     or key == 'versionEndIncluding' and compared > 0
                     or key == 'versionEndExcluding' and compared >= 0):
-                return False, True
-        return (None if uncertain else True), True
+                return False
+        return True
 
     def node(item):
-        results = [leaf(m) for m in item.get('cpeMatch', [])]
-        results += [node(n) for n in item.get('nodes', []) + item.get('children', [])]
-        if not results:
-            return None, True
-        states = [state for state, _ in results]
-        relevant = any(target for _, target in results)
         if item.get('negate'):
-            return None, relevant
-        if item.get('operator', 'OR') == 'AND':
-            state = False if False in states else (None if None in states else True)
-        else:
-            # Unrelated OR alternatives do not make an excluded target uncertain.
-            states = [state for state, target in results if target] or [None]
-            state = True if True in states else (None if None in states else False)
-        return state, relevant
+            return False
+        return any(leaf(match) for match in item.get('cpeMatch', [])) or any(
+            node(child) for child in item.get('nodes', []) + item.get('children', [])
+        )
 
-    results = [node(configuration) for configuration in cve['configurations']]
-    if any(state is True and target for state, target in results):
-        return 'confirmed'
-    if any(state is None and target for state, target in results):
-        return 'low_confidence'
-    return 'excluded'
+    return 'confirmed' if any(node(configuration) for configuration in cve['configurations']) else 'excluded'
 
 
 def collect(query: dict[str, str]) -> dict:
     use_cpe = bool(query["cpeVendor"] and query["cpeProduct"] and query["version"])
-    method = "cpe" if use_cpe else "keyword"
+    if not use_cpe:
+        return {
+            "asset": {"vendor": query["vendor"], "product": query["product"], "version": query["version"]},
+            "matching": {"method": "none", "confidence": "unavailable", "query": "",
+                         "message": "Pas de correspondance CPE fiable — recherche manuelle recommandée"},
+            "vulnerabilities": [], "totalResults": 0, "nvdTotalResults": 0,
+            "matchingPolicy": MATCHING_POLICY,
+            "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "cached": False, "sources": [],
+        }
+    method = "cpe"
     cpe = ""
     if use_cpe:
         cpe = (
             f"cpe:2.3:{query['part']}:{cpe_component(query['cpeVendor'])}:"
             f"{cpe_component(query['cpeProduct'])}:{cpe_component(query['version'])}:*:*:*:*:*:*:*"
         )
-    keyword = " ".join(value for value in (query["vendor"], query["product"], query["version"]) if value)
-
-    def nvd_url(kind: str, start: int = 0) -> str:
-        parameter = {"resultsPerPage": str(MAX_RESULTS), "startIndex": str(start)}
-        if kind == "cpe":
-            parameter["isVulnerable"] = ""
-        parameter["cpeName" if kind == "cpe" else "keywordSearch"] = cpe if kind == "cpe" else keyword
+    def nvd_url(start: int = 0) -> str:
+        parameter = {"resultsPerPage": str(MAX_RESULTS), "startIndex": str(start),
+                     "isVulnerable": "", "cpeName": cpe}
         return f"{NVD_API}?{urllib.parse.urlencode(parameter)}"
 
-    nvd = fetch_json(nvd_url(method))
+    nvd = fetch_json(nvd_url())
     candidates = list(nvd.get("vulnerabilities", []))
     while len(candidates) < nvd.get("totalResults", 0):
-        page = fetch_json(nvd_url(method, len(candidates)))
+        page = fetch_json(nvd_url(len(candidates)))
         batch = page.get("vulnerabilities", [])
         if not batch:
             raise RuntimeError("Pagination NVD incomplète")
@@ -2735,7 +2673,7 @@ def collect(query: dict[str, str]) -> dict:
 
     sources = [{
         "name": "NVD / NIST", "status": "online", "url": "https://nvd.nist.gov/",
-        "detail": "Correspondance CPE et version exacte" if method == "cpe" else "Recherche textuelle de repli à vérifier",
+        "detail": "Correspondance CPE structurée et version explicitement couverte",
     }]
     try:
         kev = get_kev()
@@ -2754,7 +2692,7 @@ def collect(query: dict[str, str]) -> dict:
     vulnerabilities.sort(key=lambda item: (bool(item["kev"]), item["score"] or 0), reverse=True)
     return {
         "asset": {"vendor": query["vendor"], "product": query["product"], "version": query["version"]},
-        "matching": {"method": method, "confidence": "high" if method == "cpe" else "medium", "query": cpe if method == "cpe" else keyword},
+        "matching": {"method": method, "confidence": "high", "query": cpe},
         "vulnerabilities": vulnerabilities,
         "totalResults": len(vulnerabilities),
         "nvdTotalResults": nvd.get("totalResults", len(candidates)),

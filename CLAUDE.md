@@ -274,20 +274,31 @@ explicite, documentée et appliquée de façon cohérente dans `compose.yaml`,
 silencieusement `mistral:7b-instruct`.
 
 
-## Corrélation stricte des versions (politique 2)
+## Règle de non-régression : corrélation CPE exclusivement (politique 3)
 
-La marque et le nom du produit ne prouvent jamais qu’une version est affectée.
-Le collecteur évalue les configurations NVD (CPE 2.3, vulnerable=true, AND/OR),
-le CPE exact ou les quatre bornes versionStart/End Including/Excluding.
-Les versions numériques se comparent par composantes (7.6.10 > 7.6.3).
-Les suffixes non ordonnables, CPE sans version/plage, prérequis d’environnement
-inconnus et négations donnent `confidence: low_confidence`, badge « à vérifier ».
-Une exclusion certaine est retirée des résultats. Une recherche CPE sans résultat
-ne déclenche jamais de recherche textuelle élargie. Toutes les pages NVD sont lues.
-Les entrées `low_confidence` restent visibles mais sont interdites dans les emails.
-La base notifications stocke confidence : confirmed / low_confidence / excluded.
-Les anciennes notifications sont non confirmées par migration, les anciens caches
-sont réévalués avant utilisation ; en cas de source indisponible ils restent à vérifier.
-L’API web utilise exclusivement ce collecteur, sans algorithme de repli moins strict.
-Une absence de résultat n’est pas une preuve d’absence de vulnérabilité : elle dépend
-de la couverture et des données d’applicabilité publiées par NVD.
+Une CVE ne peut être associée à un équipement que si au moins un élément NVD
+`configurations/cpeMatch` remplit simultanément toutes ces conditions :
+
+1. CPE 2.3 structuré et `vulnerable=true` ;
+2. `part`, `vendor` et `product` identiques à ceux de l’équipement ;
+3. version CPE exactement identique à la version installée, ou version installée
+   explicitement couverte par `versionStartIncluding`, `versionStartExcluding`,
+   `versionEndIncluding` et/ou `versionEndExcluding`.
+
+Un CPE avec version `*` sans borne ne couvre aucune version déterminée pour
+OpenVigie. Les versions absentes, `-`, non comparables, les CPE incomplets et les
+configurations ambiguës sont exclus, jamais affichés comme « à vérifier » dans le
+parc. Il est interdit d’utiliser le titre, la description, le résumé, le vendeur,
+le produit ou un `keywordSearch` pour associer une CVE à un équipement.
+
+Les recherches textuelles restent autorisées dans les outils explicitement dédiés
+à la recherche d’articles ou à la veille manuelle, mais elles ne doivent alimenter
+ni la liste CVE du parc, ni sa matrice, ni Vigi, ni les notifications ou emails.
+Les articles liés à un équipement ne le sont que par intersection avec un identifiant
+CVE déjà confirmé par la règle CPE ci-dessus.
+
+Sans `cpeVendor`, `cpeProduct` et version fiables, afficher exactement :
+« Pas de correspondance CPE fiable — recherche manuelle recommandée » et une liste
+CVE vide. Un changement de politique doit purger les instantanés et désactiver les
+anciennes notifications avant recalcul. Une absence de résultat reste dépendante de
+la couverture NVD et ne constitue pas une preuve d’absence de vulnérabilité.

@@ -86,7 +86,7 @@ class AlertTests(unittest.TestCase):
 
     def test_refresh_hook(self):
         query = {'vendor': 'Test', 'product': 'Test', 'version': '1'}
-        payload = {'vulnerabilities': [{'id': 'CVE-2026-10000', 'severity': 'HIGH'}]}
+        payload = {'vulnerabilities': [{'id': 'CVE-2026-10000', 'severity': 'HIGH', 'confidence': 'confirmed'}]}
         with patch.object(collector, 'collect', return_value=payload), patch.object(collector, 'attach_related_articles', side_effect=lambda p, q: p):
             collector.refresh_query('test', query, force=True)
             collector.refresh_query('test', query, force=True)
@@ -142,6 +142,24 @@ class AlertTests(unittest.TestCase):
             notifier.deliver_pending(collector.connect)
             smtp.assert_not_called()
 
+    def test_policy_migration_purges_old_cache_and_notification(self):
+        query = {'vendor': 'Apple', 'product': 'macOS', 'version': '26.6.1'}
+        collector.register_query('legacy', query)
+        with collector.connect() as db:
+            db.execute("UPDATE monitored_queries SET payload_json=?,last_success=1 WHERE cache_key='legacy'",
+                       (json.dumps({'matchingPolicy': 2, 'vulnerabilities': [{'id': 'CVE-1999-0590'}]}),))
+            db.execute("INSERT INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at,confidence) VALUES('legacy','CVE-1999-0590','LOW','macOS','https://example.test',1,'low_confidence')")
+            db.execute("UPDATE collector_metadata SET value='2' WHERE key='cve_matching_policy'")
+        collector.initialize_database()
+        with collector.connect() as db:
+            row = db.execute("SELECT payload_json,next_refresh FROM monitored_queries WHERE cache_key='legacy'").fetchone()
+            notice = db.execute("SELECT confidence,email_sent FROM notifications WHERE cve_id='CVE-1999-0590'").fetchone()
+            policy = db.execute("SELECT value FROM collector_metadata WHERE key='cve_matching_policy'").fetchone()[0]
+        self.assertIsNone(row['payload_json'])
+        self.assertEqual(row['next_refresh'], 0)
+        self.assertEqual(tuple(notice), ('excluded', 1))
+        self.assertEqual(policy, str(collector.MATCHING_POLICY))
+
     def test_low_confidence_never_emailed(self):
         self.seed()
         with collector.connect() as db:
@@ -151,7 +169,7 @@ class AlertTests(unittest.TestCase):
         with patch('email_notifier.smtp_session') as smtp:
             collector.email_notifier.deliver_pending(collector.connect)
             smtp.assert_not_called()
-        self.assertEqual(self.request('/notifications')[1]['notifications'][0]['confidence'], 'low_confidence')
+        self.assertEqual(self.request('/notifications')[1]['notifications'], [])
 
     def test_digest_69_cves_one_message_per_equipment_cycle(self):
         query = {'vendor':'Fortinet', 'product':'FortiOS', 'version':'7.6.3'}

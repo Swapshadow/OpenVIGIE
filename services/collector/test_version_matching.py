@@ -32,7 +32,7 @@ class MatchingTests(unittest.TestCase):
 
     def test_ambiguous_data_and_identity(self):
         for item in ({}, cve(entry(MAC)), cve(entry(MAC, versionEndExcluding='26.6.1-beta'))):
-            self.assertEqual(collector.cve_confidence(item, MAC), 'low_confidence')
+            self.assertEqual(collector.cve_confidence(item, MAC), 'excluded')
         self.assertEqual(collector.cve_confidence(cve(entry(FORTI, '7.6.3')), MAC), 'excluded')
         self.assertEqual(collector.cve_confidence(cve({**entry(MAC, '26.6.1'), 'vulnerable': False}), MAC), 'excluded')
 
@@ -40,10 +40,24 @@ class MatchingTests(unittest.TestCase):
         item = cve(entry(FORTI, '7.6.3'))
         item['configurations'][0]['operator'] = 'AND'
         item['configurations'][0]['nodes'].append(dict(operator='OR', cpeMatch=[dict(criteria='cpe:2.3:h:fortinet:fortigate:100:*:*:*:*:*:*:*', vulnerable=False)]))
-        self.assertEqual(collector.cve_confidence(item, FORTI), 'low_confidence')
+        self.assertEqual(collector.cve_confidence(item, FORTI), 'confirmed')
         item = cve(entry(FORTI, '7.6.3'))
         item['configurations'][0]['negate'] = True
-        self.assertEqual(collector.cve_confidence(item, FORTI), 'low_confidence')
+        self.assertEqual(collector.cve_confidence(item, FORTI), 'excluded')
+
+    def test_cve_1999_0590_wildcard_version_is_never_associated(self):
+        legacy = cve(entry(MAC))
+        legacy['id'] = 'CVE-1999-0590'
+        self.assertEqual(collector.cve_confidence(legacy, MAC), 'excluded')
+
+    def test_missing_reliable_cpe_returns_manual_search_notice_without_nvd(self):
+        query = {**MAC, 'cpeVendor': '', 'cpeProduct': ''}
+        with patch.object(collector, 'fetch_json') as fetch:
+            result = collector.collect(query)
+        fetch.assert_not_called()
+        self.assertEqual(result['matching']['method'], 'none')
+        self.assertIn('Pas de correspondance CPE fiable', result['matching']['message'])
+        self.assertEqual(result['vulnerabilities'], [])
 
     def test_zero_cpe_results_no_keyword_fallback(self):
         with patch.object(collector, 'fetch_json', return_value={'totalResults':0,'vulnerabilities':[]}) as fetch, patch.object(collector,'get_kev',return_value={}):
@@ -60,5 +74,13 @@ class MatchingTests(unittest.TestCase):
             result=collector.collect(FORTI)
         self.assertEqual([i['id'] for i in result['vulnerabilities']], ['CVE-2026-10001'])
         self.assertEqual(result['totalResults'], 1)
+
+    def test_vigi_has_no_bulletin_text_fallback(self):
+        with patch.object(collector, '_asset_verified_snapshot', return_value=None), \
+                patch.object(collector, 'build_bulletin') as bulletin:
+            result = collector.correlate_assets([MAC])
+        bulletin.assert_not_called()
+        self.assertEqual(result['affected'], [])
+        self.assertEqual(result['unverifiedCount'], 1)
 
 if __name__ == '__main__': unittest.main()

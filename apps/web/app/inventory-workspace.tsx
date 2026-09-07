@@ -385,7 +385,7 @@ export default function InventoryWorkspace() {
 
               <div className="source-ribbon">
                 <div><span>Dernière collecte</span><strong>{data ? formatDate(data.fetchedAt) : 'En attente'}</strong></div>
-                <div><span>Correspondance</span><strong>{data?.matching.method === 'cpe' ? 'CPE + version exacte' : data ? 'Textuelle · à confirmer' : 'En attente'}</strong></div>
+                <div><span>Correspondance</span><strong>{data?.matching.method === 'cpe' ? 'CPE + version exacte' : data?.matching.message ?? 'En attente'}</strong></div>
                 <div><span>Résultats NVD</span><strong>{data?.totalResults ?? '—'}</strong></div>
                 <div><span>Exploitées (KEV)</span><strong>{data?.vulnerabilities.filter((item) => item.kev).length ?? '—'}</strong></div>
               </div>
@@ -428,10 +428,10 @@ export default function InventoryWorkspace() {
               <div className="monitor-body">
                 <aside className="vulnerability-list" aria-label="Vulnérabilités correspondantes">
                   {loading && !data && <div className="loading-state"><i /><span>Interrogation des sources officielles…</span></div>}
-                  {!loading && data && filteredVulnerabilities.length === 0 && <div className="no-results"><strong>Aucun résultat</strong><span>Essayez un autre filtre ou vérifiez la version saisie.</span></div>}
+                  {!loading && data && filteredVulnerabilities.length === 0 && <div className="no-results"><strong>Aucun résultat</strong><span>{data.matching.method === 'none' ? data.matching.message : 'Aucune CVE avec un CPE structuré couvrant explicitement cette version.'}</span></div>}
                   {filteredVulnerabilities.map((cve) => (
                     <button type="button" className="vulnerability-row" aria-current={selectedCve?.id === cve.id ? 'true' : undefined} onClick={() => setSelectedCveId(cve.id)} key={cve.id}>
-                      <span className="cve-line"><strong>{cve.id}</strong>{cve.confidence !== 'confirmed' && <em>à vérifier</em>}{cve.kev && <em>KEV</em>}</span>
+                      <span className="cve-line"><strong>{cve.id}</strong>{cve.kev && <em>KEV</em>}</span>
                       <span className="vulnerability-summary">{cve.description}</span>
                       <span className="vulnerability-score" data-severity={cve.severity}><b>{cve.score ?? '—'}</b>{cve.severity}</span>
                     </button>
@@ -447,7 +447,7 @@ export default function InventoryWorkspace() {
 
               <footer className="source-status-bar">
                 {(data?.sources ?? []).map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.name}><i data-status={source.status} /><span>{source.name}</span><small>{source.detail}</small></a>)}
-                <span className="matching-warning">Une correspondance textuelle doit être vérifiée dans l’avis éditeur avant toute décision.</span>
+                <span className="matching-warning">Seules les CVE avec un CPE structuré couvrant explicitement la version sont associées au parc.</span>
               </footer>
             </section>
           )}
@@ -465,7 +465,7 @@ function CveDossier({ cve, productName, advisoryUrl, tab, onTab }: { cve: Vulner
     <>
       <header className="live-dossier-heading">
         <div><p>{cve.id}</p><h2>{productName}</h2><span>Publié {formatDate(cve.published)} · modifié {formatDate(cve.lastModified)}</span></div>
-        <div className="badges">{cve.confidence !== 'confirmed' && <span className="badge">à vérifier</span>}<span className="badge critical">{cve.severity} {cve.score ?? '—'}</span>{cve.kev && <span className="badge critical">CISA KEV</span>}<span className="badge cyan">{cve.attackVector ?? 'Vecteur inconnu'}</span></div>
+        <div className="badges"><span className="badge critical">{cve.severity} {cve.score ?? '—'}</span>{cve.kev && <span className="badge critical">CISA KEV</span>}<span className="badge cyan">{cve.attackVector ?? 'Vecteur inconnu'}</span></div>
       </header>
       <p className="cve-description">{cve.description}</p>
       <div className="tabs compact-tabs" role="tablist" aria-label="Détails de la vulnérabilité">

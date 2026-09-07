@@ -157,6 +157,8 @@ def record(connection, equipment, query, payload, initial_scan=False):
         if not re.fullmatch(r'CVE-\d{4}-\d{4,7}', cve.get('id', '')):
             continue
         confidence = cve.get('confidence', 'low_confidence')
+        if confidence != 'confirmed':
+            continue
         old = previous.get(cve['id'])
         promoted = old and old['confidence'] != 'confirmed' and confidence == 'confirmed' and not old['email_sent']
         is_new = not old or promoted
@@ -293,8 +295,8 @@ def handle(handler, connect):
             elif path == '/notifications':
                 params = parse_qs(parsed.query)
                 offset = max(0, int(params.get('offset', ['0'])[0]))
-                rows = connection.execute('SELECT * FROM notifications WHERE confidence != "excluded" ORDER BY id DESC LIMIT 50 OFFSET ?', (offset,)).fetchall()
-                result = {'notifications': [dict(r) for r in rows], 'unread_count': connection.execute('SELECT COUNT(*) FROM notifications WHERE confidence != "excluded" AND read=0').fetchone()[0], 'has_more': connection.execute('SELECT COUNT(*) FROM notifications WHERE confidence != "excluded"').fetchone()[0] > offset + len(rows)}
+                rows = connection.execute('SELECT * FROM notifications WHERE confidence = "confirmed" ORDER BY id DESC LIMIT 50 OFFSET ?', (offset,)).fetchall()
+                result = {'notifications': [dict(r) for r in rows], 'unread_count': connection.execute('SELECT COUNT(*) FROM notifications WHERE confidence = "confirmed" AND read=0').fetchone()[0], 'has_more': connection.execute('SELECT COUNT(*) FROM notifications WHERE confidence = "confirmed"').fetchone()[0] > offset + len(rows)}
             else:
                 if path.endswith('/mark-all-read'):
                     connection.execute('UPDATE notifications SET read=1 WHERE read=0')
