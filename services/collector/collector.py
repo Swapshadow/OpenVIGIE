@@ -1944,7 +1944,9 @@ def _asset_verified_snapshot(asset: dict) -> list[dict] | None:
     except json.JSONDecodeError:
         return None
     vulnerabilities = payload.get("vulnerabilities")
-    return vulnerabilities if isinstance(vulnerabilities, list) else None
+    if payload.get('matchingPolicy') != MATCHING_POLICY or not isinstance(vulnerabilities, list):
+        return None
+    return [item for item in vulnerabilities if item.get('confidence') == 'confirmed']
 
 
 def correlate_assets(safe_assets: list[dict]) -> dict:
@@ -2607,8 +2609,101 @@ def related_articles(query: dict[str, str], vulnerabilities: list[dict]) -> list
 
 def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
     enriched = dict(payload)
+    if payload.get('matchingPolicy') != MATCHING_POLICY:
+        enriched['vulnerabilities'] = [{**item, 'confidence': 'low_confidence'} for item in payload.get('vulnerabilities', [])]
     enriched["relatedArticles"] = related_articles(query, payload.get("vulnerabilities", []))
     return enriched
+
+
+MATCHING_POLICY = 2
+
+
+def compare_versions(left: str, right: str) -> int | None:
+    """Only order dotted numeric releases; never guess vendor suffix ordering."""
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", left) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)*", right):
+        return None
+    a, b = [int(n) for n in left.split('.')], [int(n) for n in right.split('.')]
+    length = max(len(a), len(b))
+    a += [0] * (length - len(a))
+    b += [0] * (length - len(b))
+    return (a > b) - (a < b)
+
+
+def cve_confidence(cve: dict, query: dict) -> str:
+    """Evaluate NVD applicability with three-valued AND/OR logic.
+
+    Unknown environment conditions, negation, unspecified ranges and unsupported
+    version formats never establish confirmed applicability to the asset.
+    """
+    if cve.get('vulnStatus') == 'Rejected':
+        return 'excluded'
+    vendor, product, version = (query.get(k, '').lower() for k in ('cpeVendor', 'cpeProduct', 'version'))
+    if not vendor or not product or not version or not cve.get('configurations'):
+        return 'low_confidence'
+
+    def product_name(name):
+        return 'macos' if vendor == 'apple' and name == 'mac_os_x' else name
+
+    def leaf(match):
+        fields = re.split(r'(?<!\\):', match.get('criteria', ''))
+        if len(fields) != 13 or fields[:2] != ['cpe', '2.3']:
+            return None, True
+        part, cpe_vendor, cpe_product, cpe_version = fields[2:6]
+        identity = (part == query.get('part', 'a') and cpe_vendor.lower() == vendor
+                    and product_name(cpe_product.lower()) == product_name(product))
+        if not identity:
+            # A non-vulnerable environmental prerequisite cannot be inferred
+            # from this single product/version query (e.g. hardware + OS).
+            return None, False
+        if match.get('vulnerable') is not True:
+            return None, False
+        uncertain = any(f != '*' for f in fields[6:])
+        bounds = [(key, match[key]) for key in ('versionStartIncluding', 'versionStartExcluding', 'versionEndIncluding', 'versionEndExcluding') if key in match]
+        if cpe_version not in ('*', '-'):
+            exact = re.sub(r'\\(.)', r'\1', cpe_version).lower()
+            if exact != version:
+                compared = compare_versions(version, exact)
+                if compared is None:
+                    return None, True
+                if compared != 0:
+                    return False, True
+        elif cpe_version == '-' or not bounds:
+            uncertain = True
+        for key, bound in bounds:
+            compared = compare_versions(version, str(bound))
+            if compared is None:
+                uncertain = True
+                continue
+            if (key == 'versionStartIncluding' and compared < 0
+                    or key == 'versionStartExcluding' and compared <= 0
+                    or key == 'versionEndIncluding' and compared > 0
+                    or key == 'versionEndExcluding' and compared >= 0):
+                return False, True
+        return (None if uncertain else True), True
+
+    def node(item):
+        results = [leaf(m) for m in item.get('cpeMatch', [])]
+        results += [node(n) for n in item.get('nodes', []) + item.get('children', [])]
+        if not results:
+            return None, True
+        states = [state for state, _ in results]
+        relevant = any(target for _, target in results)
+        if item.get('negate'):
+            return None, relevant
+        if item.get('operator', 'OR') == 'AND':
+            state = False if False in states else (None if None in states else True)
+        else:
+            # Unrelated OR alternatives do not make an excluded target uncertain.
+            states = [state for state, target in results if target] or [None]
+            state = True if True in states else (None if None in states else False)
+        return state, relevant
+
+    results = [node(configuration) for configuration in cve['configurations']]
+    if any(state is True and target for state, target in results):
+        return 'confirmed'
+    if any(state is None and target for state, target in results):
+        return 'low_confidence'
+    return 'excluded'
 
 
 def collect(query: dict[str, str]) -> dict:
@@ -2622,15 +2717,21 @@ def collect(query: dict[str, str]) -> dict:
         )
     keyword = " ".join(value for value in (query["vendor"], query["product"], query["version"]) if value)
 
-    def nvd_url(kind: str) -> str:
-        parameter = {"resultsPerPage": str(MAX_RESULTS)}
+    def nvd_url(kind: str, start: int = 0) -> str:
+        parameter = {"resultsPerPage": str(MAX_RESULTS), "startIndex": str(start)}
+        if kind == "cpe":
+            parameter["isVulnerable"] = ""
         parameter["cpeName" if kind == "cpe" else "keywordSearch"] = cpe if kind == "cpe" else keyword
         return f"{NVD_API}?{urllib.parse.urlencode(parameter)}"
 
     nvd = fetch_json(nvd_url(method))
-    if method == "cpe" and not nvd.get("totalResults", 0):
-        method = "keyword"
-        nvd = fetch_json(nvd_url(method))
+    candidates = list(nvd.get("vulnerabilities", []))
+    while len(candidates) < nvd.get("totalResults", 0):
+        page = fetch_json(nvd_url(method, len(candidates)))
+        batch = page.get("vulnerabilities", [])
+        if not batch:
+            raise RuntimeError("Pagination NVD incomplète")
+        candidates.extend(batch)
 
     sources = [{
         "name": "NVD / NIST", "status": "online", "url": "https://nvd.nist.gov/",
@@ -2643,13 +2744,21 @@ def collect(query: dict[str, str]) -> dict:
         kev = {}
         sources.append({"name": "CISA KEV", "status": "degraded", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "detail": "Source temporairement indisponible"})
 
-    vulnerabilities = [normalize_cve(item["cve"], kev) for item in nvd.get("vulnerabilities", []) if item.get("cve")]
+    vulnerabilities = []
+    for item in candidates:
+        if not item.get('cve'):
+            continue
+        confidence = cve_confidence(item['cve'], query)
+        if confidence != 'excluded':
+            vulnerabilities.append({**normalize_cve(item['cve'], kev), 'confidence': confidence})
     vulnerabilities.sort(key=lambda item: (bool(item["kev"]), item["score"] or 0), reverse=True)
     return {
         "asset": {"vendor": query["vendor"], "product": query["product"], "version": query["version"]},
         "matching": {"method": method, "confidence": "high" if method == "cpe" else "medium", "query": cpe if method == "cpe" else keyword},
         "vulnerabilities": vulnerabilities,
-        "totalResults": nvd.get("totalResults", len(vulnerabilities)),
+        "totalResults": len(vulnerabilities),
+        "nvdTotalResults": nvd.get("totalResults", len(candidates)),
+        "matchingPolicy": MATCHING_POLICY,
         "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "cached": False,
         "sources": sources,
@@ -2679,7 +2788,7 @@ def refresh_query(key: str, query: dict[str, str], force: bool = False) -> dict:
     register_query(key, query)
     row = read_cached(key)
     now = int(time.time())
-    if not force and row and row["payload_json"] and (row["last_success"] or 0) + REFRESH_SECONDS > now:
+    if not force and row and row["payload_json"] and json.loads(row["payload_json"]).get("matchingPolicy") == MATCHING_POLICY and (row["last_success"] or 0) + REFRESH_SECONDS > now:
         payload = json.loads(row["payload_json"])
         payload["cached"] = True
         return attach_related_articles(payload, query)
@@ -2687,7 +2796,7 @@ def refresh_query(key: str, query: dict[str, str], force: bool = False) -> dict:
     with lock_for(key):
         row = read_cached(key)
         now = int(time.time())
-        if not force and row and row["payload_json"] and (row["last_success"] or 0) + REFRESH_SECONDS > now:
+        if not force and row and row["payload_json"] and json.loads(row["payload_json"]).get("matchingPolicy") == MATCHING_POLICY and (row["last_success"] or 0) + REFRESH_SECONDS > now:
             payload = json.loads(row["payload_json"])
             payload["cached"] = True
             return attach_related_articles(payload, query)

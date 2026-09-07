@@ -46,7 +46,7 @@ class AlertTests(unittest.TestCase):
         query = {'vendor': 'Example', 'product': 'Firewall', 'version': '1.0'}
         collector.register_query('equipment', query)
         with collector.connect() as connection:
-            notifier.record(connection, 'equipment', query, {'vulnerabilities': [{'id': 'CVE-2026-12345', 'severity': 'CRITICAL'}]})
+            notifier.record(connection, 'equipment', query, {'vulnerabilities': [{'id': 'CVE-2026-12345', 'severity': 'CRITICAL', 'confidence': 'confirmed'}]})
 
     def test_encryption_redaction_and_preservation(self):
         status, body = self.request('/settings/email-config', 'POST', self.settings)
@@ -141,6 +141,17 @@ class AlertTests(unittest.TestCase):
         with patch.object(notifier, 'smtp_session') as smtp:
             notifier.deliver_pending(collector.connect)
             smtp.assert_not_called()
+
+    def test_low_confidence_never_emailed(self):
+        self.seed()
+        with collector.connect() as db:
+            db.execute("UPDATE notifications SET confidence='low_confidence'")
+        self.request('/settings/email-config','POST',self.settings)
+        self.request('/settings/email-recipients','POST',{'email':'a@example.com'})
+        with patch('email_notifier.smtp_session') as smtp:
+            collector.email_notifier.deliver_pending(collector.connect)
+            smtp.assert_not_called()
+        self.assertEqual(self.request('/notifications')[1]['notifications'][0]['confidence'], 'low_confidence')
 
 if __name__ == '__main__':
     unittest.main()

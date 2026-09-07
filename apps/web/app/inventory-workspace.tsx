@@ -431,7 +431,7 @@ export default function InventoryWorkspace() {
                   {!loading && data && filteredVulnerabilities.length === 0 && <div className="no-results"><strong>Aucun résultat</strong><span>Essayez un autre filtre ou vérifiez la version saisie.</span></div>}
                   {filteredVulnerabilities.map((cve) => (
                     <button type="button" className="vulnerability-row" aria-current={selectedCve?.id === cve.id ? 'true' : undefined} onClick={() => setSelectedCveId(cve.id)} key={cve.id}>
-                      <span className="cve-line"><strong>{cve.id}</strong>{cve.kev && <em>KEV</em>}</span>
+                      <span className="cve-line"><strong>{cve.id}</strong>{cve.confidence !== 'confirmed' && <em>à vérifier</em>}{cve.kev && <em>KEV</em>}</span>
                       <span className="vulnerability-summary">{cve.description}</span>
                       <span className="vulnerability-score" data-severity={cve.severity}><b>{cve.score ?? '—'}</b>{cve.severity}</span>
                     </button>
@@ -465,7 +465,7 @@ function CveDossier({ cve, productName, advisoryUrl, tab, onTab }: { cve: Vulner
     <>
       <header className="live-dossier-heading">
         <div><p>{cve.id}</p><h2>{productName}</h2><span>Publié {formatDate(cve.published)} · modifié {formatDate(cve.lastModified)}</span></div>
-        <div className="badges"><span className="badge critical">{cve.severity} {cve.score ?? '—'}</span>{cve.kev && <span className="badge critical">CISA KEV</span>}<span className="badge cyan">{cve.attackVector ?? 'Vecteur inconnu'}</span></div>
+        <div className="badges">{cve.confidence !== 'confirmed' && <span className="badge">à vérifier</span>}<span className="badge critical">{cve.severity} {cve.score ?? '—'}</span>{cve.kev && <span className="badge critical">CISA KEV</span>}<span className="badge cyan">{cve.attackVector ?? 'Vecteur inconnu'}</span></div>
       </header>
       <p className="cve-description">{cve.description}</p>
       <div className="tabs compact-tabs" role="tablist" aria-label="Détails de la vulnérabilité">

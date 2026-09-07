@@ -48,6 +48,14 @@ def initialize(connection):
         PRIMARY KEY(notification_id, recipient));
     ''')
 
+    columns = {row[1] for row in connection.execute('PRAGMA table_info(notifications)')}
+    if 'confidence' not in columns:
+        connection.execute("ALTER TABLE notifications ADD COLUMN confidence TEXT NOT NULL DEFAULT 'low_confidence'")
+        # Existing records have no applicability evidence. Recheck before emailing.
+        tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if 'monitored_queries' in tables:
+            connection.execute('UPDATE monitored_queries SET next_refresh=0')
+
 
 def config(connection):
     row = connection.execute('SELECT * FROM email_config WHERE id=1').fetchone()
@@ -117,13 +125,14 @@ def smtp_session(settings):
 
 
 def record(connection, equipment, query, payload):
+    connection.execute("UPDATE notifications SET confidence='excluded' WHERE equipment=?", (equipment,))
     for cve in payload.get('vulnerabilities', []):
         if not re.fullmatch(r'CVE-\d{4}-\d{4,7}', cve.get('id', '')):
             continue
         urls = [r.get('url', '') for r in cve.get('references', []) if 'Vendor Advisory' in r.get('tags', [])]
         url = next((u for u in urls if u.startswith(('https://', 'http://'))), 'https://nvd.nist.gov/vuln/detail/' + cve['id'])
-        connection.execute('INSERT OR IGNORE INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at) VALUES(?,?,?,?,?,?)',
-                           (equipment, cve['id'], cve.get('severity', 'UNKNOWN'), ' '.join(query.get(k, '') for k in ('vendor','product','version')).strip(), url, int(time.time())))
+        connection.execute("INSERT INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at,confidence) VALUES(?,?,?,?,?,?,?) ON CONFLICT(equipment,cve_id) DO UPDATE SET confidence=excluded.confidence,severity=excluded.severity,advisory_url=excluded.advisory_url",
+                           (equipment, cve['id'], cve.get('severity', 'UNKNOWN'), ' '.join(query.get(k, '') for k in ('vendor','product','version')).strip(), url, int(time.time()), cve.get('confidence', 'low_confidence')))
 
 
 def deliver_pending(connect):
@@ -135,7 +144,7 @@ def deliver_pending(connect):
             recipients = [r['email'] for r in connection.execute('SELECT email FROM email_recipients')]
             if not settings or not settings['enabled'] or not recipients:
                 return
-            rows = connection.execute('SELECT * FROM notifications WHERE email_sent=0 AND next_attempt<=? AND equipment IN (SELECT cache_key FROM monitored_queries) ORDER BY id LIMIT 20', (int(time.time()),)).fetchall()
+            rows = connection.execute('SELECT * FROM notifications WHERE confidence="confirmed" AND email_sent=0 AND next_attempt<=? AND equipment IN (SELECT cache_key FROM monitored_queries) ORDER BY id LIMIT 20', (int(time.time()),)).fetchall()
         for row in rows:
             try:
                 with smtp_session(settings) as client:
@@ -224,8 +233,8 @@ def handle(handler, connect):
             elif path == '/notifications':
                 params = parse_qs(parsed.query)
                 offset = max(0, int(params.get('offset', ['0'])[0]))
-                rows = connection.execute('SELECT * FROM notifications ORDER BY id DESC LIMIT 50 OFFSET ?', (offset,)).fetchall()
-                result = {'notifications': [dict(r) for r in rows], 'unread_count': connection.execute('SELECT COUNT(*) FROM notifications WHERE read=0').fetchone()[0], 'has_more': connection.execute('SELECT COUNT(*) FROM notifications').fetchone()[0] > offset + len(rows)}
+                rows = connection.execute('SELECT * FROM notifications WHERE confidence != "excluded" ORDER BY id DESC LIMIT 50 OFFSET ?', (offset,)).fetchall()
+                result = {'notifications': [dict(r) for r in rows], 'unread_count': connection.execute('SELECT COUNT(*) FROM notifications WHERE confidence != "excluded" AND read=0').fetchone()[0], 'has_more': connection.execute('SELECT COUNT(*) FROM notifications WHERE confidence != "excluded"').fetchone()[0] > offset + len(rows)}
             else:
                 if path.endswith('/mark-all-read'):
                     connection.execute('UPDATE notifications SET read=1 WHERE read=0')

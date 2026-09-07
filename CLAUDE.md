@@ -272,3 +272,22 @@ Si une migration vers un autre modèle est demandée ultérieurement, elle doit 
 explicite, documentée et appliquée de façon cohérente dans `compose.yaml`,
 `.env.example`, le collecteur, les tests et la documentation. Ne pas remplacer
 silencieusement `mistral:7b-instruct`.
+
+
+## Corrélation stricte des versions (politique 2)
+
+La marque et le nom du produit ne prouvent jamais qu’une version est affectée.
+Le collecteur évalue les configurations NVD (CPE 2.3, vulnerable=true, AND/OR),
+le CPE exact ou les quatre bornes versionStart/End Including/Excluding.
+Les versions numériques se comparent par composantes (7.6.10 > 7.6.3).
+Les suffixes non ordonnables, CPE sans version/plage, prérequis d’environnement
+inconnus et négations donnent `confidence: low_confidence`, badge « à vérifier ».
+Une exclusion certaine est retirée des résultats. Une recherche CPE sans résultat
+ne déclenche jamais de recherche textuelle élargie. Toutes les pages NVD sont lues.
+Les entrées `low_confidence` restent visibles mais sont interdites dans les emails.
+La base notifications stocke confidence : confirmed / low_confidence / excluded.
+Les anciennes notifications sont non confirmées par migration, les anciens caches
+sont réévalués avant utilisation ; en cas de source indisponible ils restent à vérifier.
+L’API web utilise exclusivement ce collecteur, sans algorithme de repli moins strict.
+Une absence de résultat n’est pas une preuve d’absence de vulnérabilité : elle dépend
+de la couverture et des données d’applicabilité publiées par NVD.

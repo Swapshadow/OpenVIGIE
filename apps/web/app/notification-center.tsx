@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
 import { alertsRequest, useDismiss } from './alerts-client';
-type Notification = { id: number; product: string; cve_id: string; severity: string; advisory_url: string; read: number; email_sent: number; created_at: number };
+type Notification = { confidence: string; id: number; product: string; cve_id: string; severity: string; advisory_url: string; read: number; email_sent: number; created_at: number };
 export default function NotificationCenter({ open, onOpenChange }: { open: boolean; onOpenChange: (value: boolean) => void }) {
   const [items, setItems] = useState<Notification[]>([]);
   const [unread, setUnread] = useState(0);
@@ -30,7 +30,7 @@ export default function NotificationCenter({ open, onOpenChange }: { open: boole
       {error && <p role="alert" className="alerts-error">{error}</p>}
       {!error && !items.length && <p>{loading ? 'Chargement…' : 'Aucune CVE détectée pour le parc suivi.'}</p>}
       <ul className="notification-list">{items.map(n => <li key={n.id} className={n.read ? '' : 'unread'}>
-        <strong>{n.cve_id}</strong><span className="notification-severity">{n.severity}</span><p>{n.product}</p>
+        <strong>{n.cve_id}</strong>{n.confidence !== 'confirmed' && <span className="badge">à vérifier</span>}<span className="notification-severity">{n.severity}</span><p>{n.product}</p>
         <small>{new Date(n.created_at * 1000).toLocaleString('fr-FR')} · {n.email_sent ? 'Email envoyé' : 'Email non envoyé'}</small>
         <p><a href={/^https?:\/\//.test(n.advisory_url) ? n.advisory_url : `https://nvd.nist.gov/vuln/detail/${n.cve_id}`} target="_blank" rel="noopener noreferrer">Consulter l’avis ↗</a></p>
         {!n.read && <button onClick={() => void mark(n.id)}>Marquer comme lu</button>}
