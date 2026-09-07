@@ -105,7 +105,7 @@ class AlertTests(unittest.TestCase):
         self.assertNotIn('SMTP-super-secret', output.getvalue())
         self.assertEqual(self.request('/notifications')[1]['notifications'][0]['email_sent'], 0)
         with collector.connect() as connection:
-            connection.execute('UPDATE notifications SET next_attempt=0')
+            connection.execute('UPDATE detection_cycles SET next_attempt=0')
         client.send_message.reset_mock(side_effect=True)
         client.send_message.return_value = {}
         with patch.object(notifier, 'smtp_session', return_value=client):
@@ -152,6 +152,58 @@ class AlertTests(unittest.TestCase):
             collector.email_notifier.deliver_pending(collector.connect)
             smtp.assert_not_called()
         self.assertEqual(self.request('/notifications')[1]['notifications'][0]['confidence'], 'low_confidence')
+
+    def test_digest_69_cves_one_message_per_equipment_cycle(self):
+        query = {'vendor':'Fortinet', 'product':'FortiOS', 'version':'7.6.3'}
+        collector.register_query('forti', query)
+        vulnerabilities = [{'id':f'CVE-2026-{10000+i}', 'severity':'CRITICAL' if i == 68 else 'LOW', 'confidence':'confirmed'} for i in range(69)]
+        with collector.connect() as db:
+            notifier.record(db, 'forti', query, {'vulnerabilities': vulnerabilities}, initial_scan=True)
+        self.request('/settings/email-config','POST',self.settings)
+        self.request('/settings/email-recipients','POST',{'email':'a@example.com'})
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.send_message.return_value = {}
+        with patch.object(notifier,'smtp_session',return_value=client):
+            notifier.deliver_pending(collector.connect)
+        self.assertEqual(client.send_message.call_count, 1)
+        message = client.send_message.call_args.args[0]
+        self.assertIn('69 CVE', message['Subject'])
+        text = message.get_content()
+        self.assertLess(text.index('CVE-2026-10068'), text.index('CVE-2026-10000'))
+        with collector.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM notifications WHERE initial_scan=1 AND email_sent=1').fetchone()[0], 69)
+            notifier.record(db, 'forti', query, {'vulnerabilities':vulnerabilities})
+        client.send_message.reset_mock()
+        with patch.object(notifier,'smtp_session',return_value=client):
+            notifier.deliver_pending(collector.connect)
+        client.send_message.assert_not_called()
+        newer = vulnerabilities + [{'id':'CVE-2026-20000','severity':'HIGH','confidence':'confirmed'}, {'id':'CVE-2026-20001','severity':'HIGH','confidence':'low_confidence'}]
+        with collector.connect() as db:
+            notifier.record(db, 'forti', query, {'vulnerabilities':newer})
+        with patch.object(notifier,'smtp_session',return_value=client):
+            notifier.deliver_pending(collector.connect)
+        self.assertEqual(client.send_message.call_count, 1)
+        message = client.send_message.call_args.args[0]
+        self.assertIn('1 CVE', message['Subject'])
+        self.assertNotIn('CVE-2026-10000', message.get_content())
+        self.assertNotIn('CVE-2026-20001', message.get_content())
+
+    def test_initial_empty_digest_and_two_equipment_cycles(self):
+        for equipment in ('one','two'):
+            query = {'vendor':'Example','product':equipment,'version':'1'}
+            collector.register_query(equipment, query)
+            with collector.connect() as db:
+                notifier.record(db,equipment,query,{'vulnerabilities':[]},initial_scan=True)
+        self.request('/settings/email-config','POST',self.settings)
+        self.request('/settings/email-recipients','POST',{'email':'a@example.com'})
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.send_message.return_value = {}
+        with patch.object(notifier,'smtp_session',return_value=client):
+            notifier.deliver_pending(collector.connect)
+        self.assertEqual(client.send_message.call_count, 2)
+        self.assertTrue(all('0 CVE' in call.args[0]['Subject'] for call in client.send_message.call_args_list))
 
 if __name__ == '__main__':
     unittest.main()

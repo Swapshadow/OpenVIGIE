@@ -282,3 +282,17 @@ Backend checks: install `services/collector/requirements.txt`, then run
 and `python -m unittest discover -s services/collector -p "test_*.py"`.
 For local web development set `OPENVIGIE_COLLECTOR_URL=http://127.0.0.1:8787` and run the
 collector locally with `OPENVIGIE_DB_PATH` pointing to a writable SQLite file.
+
+
+### Digests par cycle
+
+Un cycle de détection crée un seul digest par équipement et par destinataire,
+y compris le premier inventaire (`initial_scan=true`). Les cycles suivants ne
+contiennent que les nouvelles CVE confirmées ; un cycle sans nouvelle CVE ne
+renvoie rien. L’analyse initiale envoie aussi un bilan à zéro correspondance
+confirmée, sans inclure les CVE ambiguës. Les notifications restent individuelles.
+`detection_cycles` garde les lots, `notifications.cycle_id` leur rattachement et
+`digest_deliveries` les accusés par destinataire. Les reprises ne fractionnent
+jamais un lot à cause d’une limite de 20 notifications. Le reliquat historique
+est regroupé une fois par équipement. Les garanties SMTP restent « au moins une
+fois » en cas de crash entre acceptation SMTP et enregistrement SQLite.

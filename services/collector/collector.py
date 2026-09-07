@@ -2807,7 +2807,7 @@ def refresh_query(key: str, query: dict[str, str], force: bool = False) -> dict:
                     "UPDATE monitored_queries SET payload_json=?, last_attempt=?, last_success=?, next_refresh=?, last_error=NULL WHERE cache_key=?",
                     (json.dumps(payload, separators=(",", ":")), now, now, now + REFRESH_SECONDS, key),
                 )
-                email_notifier.record(connection, key, query, payload)
+                email_notifier.record(connection, key, query, payload, initial_scan=not row or not row["last_success"])
             return attach_related_articles(payload, query)
         except Exception as error:
             with database_lock, connect() as connection:

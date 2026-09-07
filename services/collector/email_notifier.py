@@ -12,6 +12,7 @@ import ssl
 import sqlite3
 import threading
 import time
+import uuid
 from email.message import EmailMessage
 from urllib.parse import urlparse, parse_qs
 from cryptography.fernet import Fernet
@@ -55,6 +56,26 @@ def initialize(connection):
         tables = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if 'monitored_queries' in tables:
             connection.execute('UPDATE monitored_queries SET next_refresh=0')
+
+    connection.executescript("""
+      CREATE TABLE IF NOT EXISTS detection_cycles (
+        id TEXT PRIMARY KEY, equipment TEXT NOT NULL, product TEXT NOT NULL,
+        initial_scan INTEGER NOT NULL, created_at INTEGER NOT NULL,
+        email_sent INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS digest_deliveries (
+        cycle_id TEXT NOT NULL, recipient TEXT NOT NULL,
+        PRIMARY KEY(cycle_id, recipient));
+    """)
+    if 'cycle_id' not in columns:
+        connection.execute('ALTER TABLE notifications ADD COLUMN cycle_id TEXT')
+        connection.execute('ALTER TABLE notifications ADD COLUMN initial_scan INTEGER NOT NULL DEFAULT 0')
+        # Legacy pending notifications have no trustworthy cycle boundary.
+        # Group their backlog once per equipment rather than replay individual mail.
+        for row in connection.execute('SELECT equipment,product,MIN(created_at) AS created_at FROM notifications WHERE email_sent=0 GROUP BY equipment').fetchall():
+            cycle = uuid.uuid4().hex
+            connection.execute('INSERT INTO detection_cycles(id,equipment,product,initial_scan,created_at) VALUES(?,?,?,?,?)', (cycle,row['equipment'],row['product'],0,row['created_at']))
+            connection.execute('UPDATE notifications SET cycle_id=? WHERE equipment=? AND email_sent=0', (cycle,row['equipment']))
+
 
 
 def config(connection):
@@ -124,15 +145,53 @@ def smtp_session(settings):
         raise RuntimeError('Connexion SMTP impossible. Vérifiez les paramètres, TLS et les identifiants.') from None
 
 
-def record(connection, equipment, query, payload):
+def record(connection, equipment, query, payload, initial_scan=False):
+    previous = {row['cve_id']: dict(row) for row in connection.execute('SELECT * FROM notifications WHERE equipment=?', (equipment,))}
     connection.execute("UPDATE notifications SET confidence='excluded' WHERE equipment=?", (equipment,))
+    cycle = uuid.uuid4().hex
+    now = int(time.time())
+    product = ' '.join(query.get(k, '') for k in ('vendor', 'product', 'version')).strip()
+    new_confirmed = 0
+    new_count = 0
     for cve in payload.get('vulnerabilities', []):
         if not re.fullmatch(r'CVE-\d{4}-\d{4,7}', cve.get('id', '')):
             continue
+        confidence = cve.get('confidence', 'low_confidence')
+        old = previous.get(cve['id'])
+        promoted = old and old['confidence'] != 'confirmed' and confidence == 'confirmed' and not old['email_sent']
+        is_new = not old or promoted
+        if is_new:
+            new_count += 1
+            new_confirmed += confidence == 'confirmed'
         urls = [r.get('url', '') for r in cve.get('references', []) if 'Vendor Advisory' in r.get('tags', [])]
         url = next((u for u in urls if u.startswith(('https://', 'http://'))), 'https://nvd.nist.gov/vuln/detail/' + cve['id'])
-        connection.execute("INSERT INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at,confidence) VALUES(?,?,?,?,?,?,?) ON CONFLICT(equipment,cve_id) DO UPDATE SET confidence=excluded.confidence,severity=excluded.severity,advisory_url=excluded.advisory_url",
-                           (equipment, cve['id'], cve.get('severity', 'UNKNOWN'), ' '.join(query.get(k, '') for k in ('vendor','product','version')).strip(), url, int(time.time()), cve.get('confidence', 'low_confidence')))
+        connection.execute("""INSERT INTO notifications(equipment,cve_id,severity,product,advisory_url,created_at,confidence,cycle_id,initial_scan)
+            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(equipment,cve_id) DO UPDATE SET
+            confidence=excluded.confidence,severity=excluded.severity,advisory_url=excluded.advisory_url,
+            cycle_id=excluded.cycle_id,initial_scan=excluded.initial_scan""",
+            (equipment,cve['id'],cve.get('severity','UNKNOWN'),product,url,now,confidence,
+             cycle if is_new else old['cycle_id'], int(initial_scan) if is_new else old['initial_scan']))
+    if new_count or initial_scan:
+        connection.execute('INSERT INTO detection_cycles(id,equipment,product,initial_scan,created_at,email_sent) VALUES(?,?,?,?,?,?)',
+                           (cycle,equipment,product,int(initial_scan),now,int(not initial_scan and not new_confirmed)))
+
+
+def digest_message(settings, cycle, rows, recipient):
+    message = EmailMessage()
+    message['From'] = settings['sender']
+    message['To'] = recipient
+    message['Subject'] = f"OpenVigie — {len(rows)} CVE détectées pour {cycle['product']}"
+    # Stable Message-ID helps downstream mail systems identify retry duplicates.
+    message['Message-ID'] = f"<openvigie-{cycle['id']}-{hashlib.sha256(recipient.encode()).hexdigest()[:16]}@openvigie.local>"
+    lines = [('Analyse initiale' if cycle['initial_scan'] else 'Nouvelles CVE de ce cycle') + ' : ' + cycle['product'],
+             f"{len(rows)} correspondances de version confirmées.", '']
+    rank = {'CRITICAL': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1, 'UNKNOWN': 0}
+    for row in sorted(rows, key=lambda r: (-rank.get(r['severity'].upper(), 0), r['cve_id'])):
+        lines.append(f"[{row['severity']}] {row['cve_id']} — {row['advisory_url']}")
+    lines += ['', 'Les correspondances ambiguës ne sont pas incluses dans cet email.',
+              'Consultez les avis éditeurs avant intervention. Une absence de CVE ne prouve pas une absence de risque.']
+    message.set_content('\n'.join(lines))
+    return message
 
 
 def deliver_pending(connect):
@@ -144,28 +203,29 @@ def deliver_pending(connect):
             recipients = [r['email'] for r in connection.execute('SELECT email FROM email_recipients')]
             if not settings or not settings['enabled'] or not recipients:
                 return
-            rows = connection.execute('SELECT * FROM notifications WHERE confidence="confirmed" AND email_sent=0 AND next_attempt<=? AND equipment IN (SELECT cache_key FROM monitored_queries) ORDER BY id LIMIT 20', (int(time.time()),)).fetchall()
-        for row in rows:
+            cycles = connection.execute('SELECT * FROM detection_cycles WHERE email_sent=0 AND next_attempt<=? AND equipment IN (SELECT cache_key FROM monitored_queries) ORDER BY created_at,id LIMIT 20', (int(time.time()),)).fetchall()
+        for cycle in cycles:
             try:
+                with connect() as connection:
+                    rows = connection.execute("SELECT * FROM notifications WHERE cycle_id=? AND confidence='confirmed' AND email_sent=0", (cycle['id'],)).fetchall()
+                    if not rows and not cycle['initial_scan']:
+                        connection.execute('UPDATE detection_cycles SET email_sent=1 WHERE id=?', (cycle['id'],))
+                        continue
                 with smtp_session(settings) as client:
                     for recipient in recipients:
                         with connect() as connection:
-                            if connection.execute('SELECT 1 FROM notification_deliveries WHERE notification_id=? AND recipient=?', (row['id'], recipient)).fetchone():
+                            if connection.execute('SELECT 1 FROM digest_deliveries WHERE cycle_id=? AND recipient=?', (cycle['id'],recipient)).fetchone():
                                 continue
-                        message = EmailMessage()
-                        message['From'] = settings['sender']
-                        message['To'] = recipient
-                        message['Subject'] = f"OpenVigie — {row['cve_id']} ({row['severity']})"
-                        message.set_content(f"Produit suivi : {row['product']}\nCVE : {row['cve_id']}\nSévérité : {row['severity']}\nAvis : {row['advisory_url']}\n\nCorrespondance à confirmer dans l'avis éditeur avant intervention.")
-                        if client.send_message(message):
+                        if client.send_message(digest_message(settings, cycle, rows, recipient)):
                             raise RuntimeError('Recipient refused')
                         with connect() as connection:
-                            connection.execute('INSERT OR IGNORE INTO notification_deliveries VALUES(?,?)', (row['id'], recipient))
+                            connection.execute('INSERT OR IGNORE INTO digest_deliveries VALUES(?,?)', (cycle['id'],recipient))
                 with connect() as connection:
-                    connection.execute('UPDATE notifications SET email_sent=1 WHERE id=?', (row['id'],))
+                    connection.execute('UPDATE detection_cycles SET email_sent=1 WHERE id=?', (cycle['id'],))
+                    connection.execute("UPDATE notifications SET email_sent=1 WHERE cycle_id=? AND confidence='confirmed'", (cycle['id'],))
             except Exception:
                 with connect() as connection:
-                    connection.execute('UPDATE notifications SET next_attempt=? WHERE id=?', (int(time.time()) + 300, row['id']))
+                    connection.execute('UPDATE detection_cycles SET next_attempt=? WHERE id=?', (int(time.time())+300,cycle['id']))
     finally:
         SEND_LOCK.release()
 
