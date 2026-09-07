@@ -10,11 +10,11 @@ PRODUCTS = {
     ('o', 'hpe', 'aruba_instant_on_1930_8g_2sfp_firmware'): {'1.0.7.0'},
     ('o', 'hpe', 'aruba_instant_on_1930_8g_class4_poe_2sfp_124w_firmware'): {'1.0.7.0'},
     ('o', 'fortinet', 'fortipam'): {'1.9.1', '1.9.0', '1.8.4', '1.8.3', '1.8.2', '1.8.1', '1.8.0', '1.7.3', '1.7.2', '1.7.1', '1.7.0'},
-    ('a', 'fortinet', 'forticlient_ssl_vpn'): {'4.0.2012'},
+    ('a', 'fortinet', 'forticlient'): {'7.4.5', '7.4.3'},
     ('o', 'hp', 'simplivity_omnistack_for_cisco_firmware'): {'3.7.9', '3.5.2', '3.0.8'},
     ('o', 'hp', 'simplivity_omnistack_for_dell_firmware'): {'3.0.8'},
     ('o', 'hp', 'simplivity_omnistack_for_lenovo_firmware'): {'3.7.9', '3.5.2', '3.0.8'},
-    ('a', 'microsoft', 'sql_server'): {'2022', '2019', '2017', '2016'},
+    ('a', 'microsoft', 'sql_server'): {'2025', '2022', '2019', '2017', '2016'},
     ('a', 'oracle', 'database_server'): {'23ai', '21c', '19c'},
 }
 

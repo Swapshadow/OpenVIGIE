@@ -27,8 +27,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 DB_PATH = os.environ.get("OPENVIGIE_DB_PATH", "/data/openvigie.db")
 NVD_API_KEY = os.environ.get("NVD_API_KEY", "")
 NVD_API = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+NVD_CPE_API = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
 CISA_KEV_API = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 REFRESH_SECONDS = max(300, int(os.environ.get("OPENVIGIE_REFRESH_SECONDS", "86400")))
+CPE_REFRESH_SECONDS = max(86400, int(os.environ.get("OPENVIGIE_CPE_REFRESH_SECONDS", "604800")))
 FEED_REFRESH_SECONDS = max(1800, int(os.environ.get("OPENVIGIE_FEED_REFRESH_SECONDS", "10800")))
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
 # Mistral 7B Instruct: ~4.1 GB, meilleur français, recommandé.
@@ -445,6 +447,16 @@ def initialize_database() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS cpe_version_cache (
+              part TEXT NOT NULL, vendor TEXT NOT NULL, product TEXT NOT NULL,
+              versions_json TEXT NOT NULL DEFAULT '[]', refreshed_at INTEGER,
+              next_refresh INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+              PRIMARY KEY(part, vendor, product)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS articles (
               id TEXT PRIMARY KEY,
               source_id TEXT NOT NULL,
@@ -614,9 +626,10 @@ def fetch_json(url: str) -> dict:
         "Accept": "application/json",
         "User-Agent": "OpenVigie/0.3 (+https://github.com/Swapshadow/openvigie)",
     }
-    if NVD_API_KEY and url.startswith(NVD_API):
+    is_nvd = url.startswith("https://services.nvd.nist.gov/rest/json/")
+    if NVD_API_KEY and is_nvd:
         headers["apiKey"] = NVD_API_KEY
-    if url.startswith(NVD_API):
+    if is_nvd:
         with nvd_rate_lock:
             minimum_interval = 0.7 if NVD_API_KEY else 6.2
             wait = minimum_interval - (time.monotonic() - last_nvd_request)
@@ -2487,6 +2500,93 @@ def cpe_component(value: str) -> str:
     return re.sub(r"([!\"#$%&'()+,/:;<=>?@\[\]^`{|}~])", r"\\\1", value)
 
 
+def dictionary_identities(part: str, vendor: str, product: str) -> list[tuple[str, str, str]]:
+    identities = [(part, vendor, product)]
+    if vendor == 'vmware' and product in ('esxi', 'esx'):
+        identities = [(candidate_part, vendor, candidate_product)
+                      for candidate_part in ('o', 'a') for candidate_product in ('esxi', 'esx')]
+    if vendor == 'microsoft' and product == 'sql_server':
+        identities.extend(('a', vendor, f'sql_server_{year}') for year in ('2016', '2017', '2019', '2022', '2025'))
+    return identities
+
+
+def version_sort_key(value: str):
+    normalized = value.lower().replace(' update_', '.').replace(' u', '.').replace('_', '.')
+    numbers = tuple(int(item) for item in re.findall(r'\d+', normalized))
+    return numbers, normalized
+
+
+def fetch_dictionary_versions(part: str, vendor: str, product: str) -> list[str]:
+    versions = set()
+    for cpe_part, cpe_vendor, cpe_product in dictionary_identities(part, vendor, product):
+        pattern = f'cpe:2.3:{cpe_part}:{cpe_component(cpe_vendor)}:{cpe_component(cpe_product)}:*:*:*:*:*:*:*:*'
+        start = 0
+        while True:
+            url = NVD_CPE_API + '?' + urllib.parse.urlencode({
+                'cpeMatchString': pattern, 'resultsPerPage': MAX_RESULTS, 'startIndex': start,
+            })
+            payload = fetch_json(url)
+            rows = payload.get('products', [])
+            for row in rows:
+                cpe = row.get('cpe', {})
+                if cpe.get('deprecated'):
+                    continue
+                fields = re.split(r'(?<!\\):', cpe.get('cpeName', ''))
+                if len(fields) != 13:
+                    continue
+                cpe_version, update = fields[5], fields[6]
+                if cpe_product.startswith('sql_server_'):
+                    versions.add(cpe_product.removeprefix('sql_server_'))
+                if cpe_version in ('*', '-'):
+                    continue
+                cpe_version = re.sub(r'\\(.)', r'\1', cpe_version)
+                if vendor == 'vmware' and product in ('esxi', 'esx') and update.startswith('update_'):
+                    versions.add(f"{cpe_version} U{update.removeprefix('update_')}")
+                else:
+                    versions.add(cpe_version)
+            start += len(rows)
+            if not rows or start >= payload.get('totalResults', 0):
+                break
+    return sorted(versions, key=version_sort_key, reverse=True)
+
+
+def catalog_versions(part: str, vendor: str, product: str, force: bool = False) -> dict:
+    now = int(time.time())
+    with database_lock, connect() as connection:
+        row = connection.execute(
+            'SELECT * FROM cpe_version_cache WHERE part=? AND vendor=? AND product=?',
+            (part, vendor, product),
+        ).fetchone()
+        if row and not force and row['next_refresh'] > now:
+            return {'versions': json.loads(row['versions_json']), 'cached': True,
+                    'refreshedAt': row['refreshed_at'], 'source': 'NVD CPE Dictionary'}
+    try:
+        versions = fetch_dictionary_versions(part, vendor, product)
+        if not versions:
+            raise RuntimeError('Aucune version CPE active trouvée')
+        with database_lock, connect() as connection:
+            connection.execute(
+                """INSERT INTO cpe_version_cache(part,vendor,product,versions_json,refreshed_at,next_refresh,last_error)
+                   VALUES(?,?,?,?,?,?,NULL) ON CONFLICT(part,vendor,product) DO UPDATE SET
+                   versions_json=excluded.versions_json,refreshed_at=excluded.refreshed_at,
+                   next_refresh=excluded.next_refresh,last_error=NULL""",
+                (part, vendor, product, json.dumps(versions), now, now + CPE_REFRESH_SECONDS),
+            )
+        return {'versions': versions, 'cached': False, 'refreshedAt': now, 'source': 'NVD CPE Dictionary'}
+    except Exception as error:
+        with database_lock, connect() as connection:
+            connection.execute(
+                """INSERT INTO cpe_version_cache(part,vendor,product,next_refresh,last_error)
+                   VALUES(?,?,?,?,?) ON CONFLICT(part,vendor,product) DO UPDATE SET
+                   next_refresh=excluded.next_refresh,last_error=excluded.last_error""",
+                (part, vendor, product, now + 3600, type(error).__name__),
+            )
+        if row:
+            return {'versions': json.loads(row['versions_json']), 'cached': True, 'stale': True,
+                    'refreshedAt': row['refreshed_at'], 'source': 'NVD CPE Dictionary'}
+        raise
+
+
 def choose_metric(cve: dict) -> dict:
     metrics = cve.get("metrics", {})
     for name in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
@@ -2875,6 +2975,16 @@ def vulnerability_scheduler() -> None:
             except Exception as error:
                 print(f"collector refresh failed for {row['cache_key'][:8]}: {error}", flush=True)
             time.sleep(7 if not NVD_API_KEY else 1)
+        with database_lock, connect() as connection:
+            due_cpe = connection.execute(
+                'SELECT part,vendor,product FROM cpe_version_cache WHERE next_refresh<=? ORDER BY next_refresh LIMIT 1',
+                (int(time.time()),),
+            ).fetchone()
+        if due_cpe:
+            try:
+                catalog_versions(due_cpe['part'], due_cpe['vendor'], due_cpe['product'], force=True)
+            except Exception:
+                pass
 
 
 def cleanup_old_articles() -> None:
@@ -2941,6 +3051,24 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/feeds/status":
             self.send_json(200, {"sources": feed_statuses(), "refreshSeconds": FEED_REFRESH_SECONDS})
+            return
+        if parsed.path == "/catalog/versions":
+            try:
+                parameters = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+                part = validate_text(parameters.get('part', ['a'])[0], 1)
+                vendor = validate_text(parameters.get('cpeVendor', [''])[0], 100).lower()
+                product = validate_text(parameters.get('cpeProduct', [''])[0], 100).lower()
+                if part not in ('a', 'o', 'h') or not vendor or not product:
+                    raise ValueError('Identité CPE invalide')
+                payload = catalog_versions(part, vendor, product, parameters.get('force', ['0'])[0] == '1')
+                payload.update({'part': part, 'vendor': vendor, 'product': product,
+                                'refreshSeconds': CPE_REFRESH_SECONDS})
+                self.send_json(200, payload)
+            except ValueError as error:
+                self.send_json(400, {'error': str(error)})
+            except Exception as error:
+                print(f"CPE version refresh failed: {type(error).__name__}", flush=True)
+                self.send_json(503, {'error': 'Dictionnaire CPE NVD temporairement indisponible'})
             return
         if parsed.path == "/articles":
             try:

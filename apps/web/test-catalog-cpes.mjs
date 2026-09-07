@@ -5,7 +5,7 @@ const catalog = readFileSync(new URL('./app/asset-catalog.ts', import.meta.url),
 const expected = [
   ['Aruba Instant On', 'hpe', 'aruba_instant_on_1930_8g_2sfp_firmware'],
   ['FortiPAM', 'fortinet', 'fortipam'],
-  ['FortiVPN / FortiClient SSL VPN', 'fortinet', 'forticlient_ssl_vpn'],
+  ['FortiVPN / FortiClient', 'fortinet', 'forticlient'],
   ['SimpliVity OmniStack for Cisco', 'hp', 'simplivity_omnistack_for_cisco_firmware'],
   ['Microsoft SQL Server', 'microsoft', 'sql_server'],
   ['Oracle Database', 'oracle', 'database_server'],

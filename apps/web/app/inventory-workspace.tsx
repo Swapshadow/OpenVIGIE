@@ -31,6 +31,9 @@ export default function InventoryWorkspace() {
   const [vendorId, setVendorId] = useState(vendorCatalog[0].id);
   const [productId, setProductId] = useState(vendorCatalog[0].products[0].id);
   const [version, setVersion] = useState('');
+  const [availableVersions, setAvailableVersions] = useState<string[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsStale, setVersionsStale] = useState(false);
   const [customVersion, setCustomVersion] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState('');
   const [label, setLabel] = useState('');
@@ -49,6 +52,32 @@ export default function InventoryWorkspace() {
 
   const selectedVendor = findVendor(vendorId);
   const selectedProduct = findProduct(vendorId, productId);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setAvailableVersions([]);
+    setVersionsStale(false);
+    if (!selectedProduct.cpeVendor || !selectedProduct.cpeProduct) return () => controller.abort();
+    setVersionsLoading(true);
+    const params = new URLSearchParams({
+      part: selectedProduct.part,
+      cpeVendor: selectedProduct.cpeVendor,
+      cpeProduct: selectedProduct.cpeProduct,
+    });
+    void fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = await response.json() as { versions?: string[]; stale?: boolean; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Versions indisponibles');
+        setAvailableVersions(payload.versions ?? []);
+        setVersionsStale(Boolean(payload.stale));
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setVersionsStale(true);
+      })
+      .finally(() => setVersionsLoading(false));
+    return () => controller.abort();
+  }, [selectedProduct]);
 
   // Free-text search across the whole catalog: with 55 brands, walking two
   // chained dropdowns to find "macOS" is slower than typing it.
@@ -305,11 +334,12 @@ export default function InventoryWorkspace() {
                     setVersion(event.target.value);
                   }}
                 >
-                  <option value="">{selectedProduct.versionOptional ? 'Non applicable' : 'Choisir une version…'}</option>
-                  {selectedProduct.versions.map((item) => <option value={item} key={item}>{item}</option>)}
+                  <option value="">{versionsLoading ? 'Chargement depuis le NVD…' : selectedProduct.versionOptional ? 'Non applicable' : 'Choisir une version…'}</option>
+                  {availableVersions.map((item) => <option value={item} key={item}>{item}</option>)}
                   <option value={CUSTOM_VERSION}>Autre version…</option>
                 </select>
               )}
+              {versionsStale ? <small>Cache NVD indisponible ou ancien — utilisez la saisie libre si nécessaire.</small> : null}
               {customVersion ? (
                 <button type="button" className="version-back" onClick={() => { setCustomVersion(false); setVersion(''); }}>
                   ← Versions connues

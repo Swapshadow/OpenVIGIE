@@ -311,3 +311,9 @@ Sans `cpeVendor`, `cpeProduct` et version fiables, afficher exactement :
 CVE vide. Un changement de politique doit purger les instantanés et désactiver les
 anciennes notifications avant recalcul. Une absence de résultat reste dépendante de
 la couverture NVD et ne constitue pas une preuve d’absence de vulnérabilité.
+
+## Règle de non-régression : catalogue de versions dynamique
+
+Le catalogue de versions ne doit plus jamais être une liste statique codée en
+dur. Toute marque/produit doit utiliser `fetch_dictionary_versions()` avec cache
+SQLite `cpe_version_cache` (TTL 7j) et saisie libre en fallback.
