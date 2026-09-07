@@ -189,6 +189,13 @@ button { color: inherit; }
 .tabs { display: flex; gap: 7px; padding: 0 15px 11px; border-bottom: 1px solid var(--line); }
 .tabs button { min-height: 38px; padding: 0 13px; border: 1px solid rgba(255,255,255,.13); border-radius: 12px; color: var(--muted); background: rgba(255,255,255,.035); cursor: pointer; font-size: 10px; }
 .tabs button[aria-selected="true"] { border-color: rgba(var(--cyan-rgb),.55); color: var(--ink); background: linear-gradient(135deg, rgba(var(--cyan-rgb),.16), rgba(var(--pink-rgb),.12)); box-shadow: 0 0 20px rgba(var(--cyan-rgb),.11), inset 0 1px 0 rgba(255,255,255,.12); }
+/* Bulletin view now hosts internal tabs (news / data leaks) as a single grid
+   column child, so it must stack the tab bar above the active panel and let
+   that panel take the remaining height. */
+.bulletin-view { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.bulletin-view > :last-child { flex: 1; min-height: 0; }
+.bulletin-section-tabs { padding: 12px 15px; margin: 0; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.03); }
+
 .tab-panel { padding: 14px 16px 16px; }
 .section-label { margin: 0 0 10px; color: var(--cyan); font-size: 10px; font-weight: 500; letter-spacing: .12em; text-transform: uppercase; }
 .attack-chain { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }

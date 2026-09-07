@@ -10,10 +10,11 @@ import SettingsMenu from './settings-menu';
 import EmailAlertsConfig from './email-alerts-config';
 import NotificationCenter from './notification-center';
 
-type View = 'bulletin' | 'leaks' | 'assets';
+type View = 'bulletin' | 'assets';
+type BulletinTab = 'news' | 'leaks';
 type Theme = 'dark' | 'light';
 
-type IconName = View | 'radar' | 'notifications' | 'search' | 'sun' | 'moon';
+type IconName = View | 'leaks' | 'radar' | 'notifications' | 'search' | 'sun' | 'moon';
 
 const THEME_STORAGE_KEY = 'openvigie.theme';
 
@@ -36,6 +37,7 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
   const [view, setView] = useState<View>('bulletin');
   const [settingsView, setSettingsView] = useState<'email' | 'about' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [bulletinTab, setBulletinTab] = useState<BulletinTab>('news');
   const navigate = (next: View) => { setSettingsView(null); setView(next); };
   const [cadence] = useState<Cadence>('daily');
   const [theme, setTheme] = useState<Theme>('dark');
@@ -101,7 +103,6 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
           <nav className="nav-list">
             {[
               ['bulletin', 'Bulletin'],
-              ['leaks', 'Fuites de données'],
               ['assets', 'Mon parc'],
             ].map(([id, label]) => (
               <button
@@ -124,9 +125,17 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
         </aside>
 
         {settingsView === 'email' ? <EmailAlertsConfig /> : settingsView === 'about' ? <section className="email-settings glass-panel"><h1>À propos d’OpenVigie</h1><p>Veille de vulnérabilités open source centrée sur votre parc d’équipements.</p><p>Licence AGPL-3.0. Confirmez les correspondances CVE dans les avis éditeurs.</p><a href="https://github.com/Swapshadow/openvigie" target="_blank" rel="noopener noreferrer">Code source et contributions ↗</a></section> : view === 'bulletin' ? (
-          bulletin
-        ) : view === 'leaks' ? (
-          <LeakToday />
+          <div className="bulletin-view">
+            <div className="tabs bulletin-section-tabs" role="tablist" aria-label="Sections du bulletin">
+              <button type="button" role="tab" aria-selected={bulletinTab === 'news'} onClick={() => setBulletinTab('news')}>
+                Toutes les news
+              </button>
+              <button type="button" role="tab" aria-selected={bulletinTab === 'leaks'} onClick={() => setBulletinTab('leaks')}>
+                Fuites de données
+              </button>
+            </div>
+            {bulletinTab === 'news' ? bulletin : <LeakToday />}
+          </div>
         ) : (
           <InventoryWorkspace />
         )}
