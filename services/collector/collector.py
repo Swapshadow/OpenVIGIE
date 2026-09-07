@@ -2681,9 +2681,24 @@ def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
 
 MATCHING_POLICY = 5
 
+# Last resort ONLY. An entry here bypasses the structured-CPE rule of policy 3
+# and asserts an (installed >= lower, installed < upper) window from a primary
+# vendor or national CERT advisory. It is legitimate strictly when NVD carries
+# no usable `vendor:product` cpeMatch for that CVE at all (CVE reserved-but-
+# unanalysed, or the CVE only exposes an upstream third-party component). As
+# soon as NVD publishes a structured CPE, `cve_confidence()` takes over and the
+# entry becomes a harmless no-op that should be deleted on the next review.
+#
+# Do NOT add an entry here to paper over a generic-matching miss: if NVD does
+# expose `vendor:product` CPEs and the match still fails, fix `cve_confidence()`
+# / `cpe_queries()` instead.
+#
+# CERTFR-2026-AVI-1015 audit (bulletins FG-IR-26-156..163, 2026-08-12): of the
+# eight CVEs, only CVE-2026-49975 touches FortiPAM, through its bundled Apache
+# HTTP Server (NVD lists it as Apache 2.4.17-2.4.67 with no Fortinet CPE). The
+# other seven map to FortiWeb / FortiClientWindows / FortiSIEM / FortiManager /
+# FortiOS per their NVD CNA descriptions and must NOT be attached to fortipam.
 PRIMARY_ADVISORY_RANGES = {
-    # CERTFR-2026-AVI-1015 / Fortinet FG-IR-26-163. NVD currently exposes the
-    # upstream Apache CVE without the affected Fortinet appliance CPEs.
     ('fortinet', 'fortipam', 'CVE-2026-49975'): (None, '1.9.2'),
 }
 
@@ -2798,7 +2813,8 @@ def cve_confidence(cve: dict, query: dict) -> str:
 
 
 def primary_advisory_confidence(cve_id: str, query: dict) -> str:
-    """Apply a version range from an identified primary or national CERT advisory."""
+    """Apply a PRIMARY_ADVISORY_RANGES window — last resort, only for CVEs with
+    no usable structured NVD CPE. See the table's comment before adding entries."""
     key = (query.get('cpeVendor', '').lower(), query.get('cpeProduct', '').lower(), cve_id)
     bounds = PRIMARY_ADVISORY_RANGES.get(key)
     if not bounds:
