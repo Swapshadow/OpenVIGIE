@@ -1,0 +1,23 @@
+# GPU override for Ollama — not applied by default.
+#
+# `docker compose up` alone stays CPU-only, unchanged. This file only takes
+# effect when explicitly layered on top of compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.gpu.yml up -d --build
+#
+# (start.sh / start.ps1 do this automatically after scripts/detect_gpu.py
+# confirms an NVIDIA GPU + the Docker 'nvidia' runtime are both available.)
+#
+# Requires: an NVIDIA GPU, up-to-date drivers, and either the NVIDIA Container
+# Toolkit (Linux) or GPU support enabled in Docker Desktop settings (Windows).
+# Not usable on macOS — Docker Desktop cannot expose a GPU to containers there
+# regardless of this file; see README-QUICKSTART.md.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
