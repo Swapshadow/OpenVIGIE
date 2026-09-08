@@ -29,6 +29,12 @@ docker compose -f docker-compose.prod.yml logs -f ollama
 # → http://localhost:3000
 ```
 
+**Alternative avec détection GPU automatique** — `./start.sh` (Linux/macOS) ou
+`.\start.ps1` (Windows) détectent un GPU NVIDIA utilisable et démarrent Vigi avec
+l'accélération matérielle si possible, sinon en CPU normalement. Purement optionnel :
+`docker compose up -d --build` seul continue de fonctionner exactement comme avant,
+toujours en CPU. Voir [Accélération GPU](#-accélération-gpu-nvidia) ci-dessous.
+
 ## 📋 Détails par OS
 
 ### macOS
@@ -88,6 +94,8 @@ docker system prune -a --volumes
 - Premier démarrage : ~5-10 min (télécharge le modèle)
 - Ensuite : ~2 min de warm-up
 - **Besoin de 8 GB RAM minimum**
+- Sur Windows/Linux avec un GPU NVIDIA, `./start.sh` ou `.\start.ps1` peuvent
+  diviser le temps d'inférence par ~5 — voir [Accélération GPU](#-accélération-gpu-nvidia).
 
 ## 📚 Documentation complète
 
@@ -105,6 +113,47 @@ docker pull swapshadow/openvigie-collector:latest
 
 **Version**: 1.0.0 | **Modèle IA**: Mistral 7B Instruct (local)
 
+
+## ⚡ Accélération GPU (NVIDIA)
+
+Par défaut, Ollama tourne en CPU — rien ne change si vous ne faites rien. Sur
+**Windows ou Linux avec un GPU NVIDIA**, l'inférence peut être nettement plus
+rapide (~5x observé avec Mistral 7B Instruct sur une RTX 3060) via le
+**NVIDIA Container Toolkit** (Linux) ou le support GPU de Docker Desktop
+(Windows, backend WSL2, à activer dans *Settings > Resources > GPU*).
+
+### Démarrage automatique
+
+```bash
+./start.sh      # Linux / macOS
+```
+```powershell
+.\start.ps1     # Windows
+```
+
+Ces scripts appellent `scripts/detect_gpu.py`, qui vérifie la présence d'un GPU
+NVIDIA (`nvidia-smi`) et que Docker peut l'utiliser (runtime `nvidia` enregistré).
+Si les deux sont réunis, la stack démarre avec `compose.gpu.yml` en plus de
+`compose.yaml` ; sinon elle démarre normalement en CPU. Dans les deux cas, un
+message clair indique le mode choisi.
+
+### Forcer le GPU manuellement
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yml up -d --build
+```
+
+`compose.gpu.yml` ajoute uniquement une réservation de GPU au service `ollama` —
+il ne modifie rien d'autre et n'est jamais appliqué automatiquement par
+`docker compose up` seul.
+
+### macOS : limitation connue, pas un bug
+
+Sur macOS (Apple Silicon comme Intel), **Docker Desktop ne peut pas exposer de
+GPU aux conteneurs** — c'est une limitation de la virtualisation de Docker
+Desktop lui-même, pas quelque chose qu'OpenVigie (ou un réglage) peut corriger.
+`start.sh` détecte macOS et lance directement en CPU avec un message explicatif,
+sans jamais essayer `compose.gpu.yml`.
 
 ## HTTPS local renouvelé automatiquement (Caddy)
 

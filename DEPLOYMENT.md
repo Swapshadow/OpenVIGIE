@@ -91,6 +91,39 @@ docker compose build --no-cache web
 docker compose up -d web
 ```
 
+## GPU Acceleration (NVIDIA)
+
+Ollama runs on CPU by default — `docker compose up` alone is unaffected by any
+of this. On Windows or Linux with an NVIDIA GPU, `scripts/detect_gpu.py` checks
+for `nvidia-smi` and a registered `nvidia` Docker runtime; `./start.sh` /
+`.\start.ps1` use it to decide whether to layer `compose.gpu.yml` on top of
+`compose.yaml`. `compose.gpu.yml` only adds a GPU device reservation to the
+`ollama` service and is never applied unless explicitly requested:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yml up -d --build
+```
+
+Requires the NVIDIA Container Toolkit on Linux, or GPU support enabled under
+Docker Desktop's *Settings > Resources > GPU* on Windows (WSL2 backend).
+
+**macOS**: Docker Desktop cannot expose a GPU to containers on macOS (Apple
+Silicon or Intel) — a Docker Desktop virtualization limitation, not something
+this project's configuration can change. `start.sh` detects macOS and always
+runs Ollama on CPU there, with an explanatory message instead of attempting
+`compose.gpu.yml`.
+
+If `ollama` was already running in CPU mode, switching to GPU (or back) needs
+that one container recreated so the device reservation actually takes effect —
+`deploy.resources` changes are not always picked up as a reason to recreate an
+already-running container:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yml up -d --force-recreate --no-deps ollama
+```
+
+(`start.sh` / `start.ps1` already do this automatically.)
+
 ## Production Notes
 
 - Images run as non-root user (`nextjs` for web, `collector` for collector)
