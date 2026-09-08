@@ -20,13 +20,42 @@ Get OpenVigie running in 3 commands:
 ```bash
 git clone https://github.com/Swapshadow/openvigie.git
 cd openvigie
+chmod +x start.sh && ./start.sh   # Linux / macOS
+```
+```powershell
+.\start.ps1                        # Windows
+```
+
+This command automatically detects whether your machine has a compatible GPU
+and enables acceleration for Vigi if possible, otherwise it starts in CPU mode
+— either way, it tells you which one was chosen.
+
+**Windows note:** if the script doesn't detect a GPU you know you have, check
+that a real Python interpreter is installed — `py --version` should print a
+version. On a stock Windows install, the `python`/`python3` commands often
+point to non-functional Microsoft Store app stubs instead; install Python from
+[python.org](https://www.python.org/downloads/) if `py --version` fails too.
+
+Then open **[http://localhost:3000](http://localhost:3000)** in your browser
+(Caddy also serves **https://localhost**, see [README-QUICKSTART.md](README-QUICKSTART.md)).
+
+**Requirements:** Docker Desktop installed. 8 GB RAM recommended for the Vigi AI
+assistant (Mistral 7B Instruct runs locally in Docker). GPU acceleration is
+optional — never required to run OpenVigie.
+
+<details>
+<summary>Advanced / scripted setup — plain <code>docker compose</code> (always CPU, no detection step)</summary>
+
+```bash
 docker compose up -d
 ```
 
-Then open **[http://localhost:3000](http://localhost:3000)** in your browser.
+Equivalent to `start.sh`/`start.ps1` minus the GPU detection: useful for
+automation, CI, or if you'd simply rather not run the wrapper. This is exactly
+what the wrapper falls back to on machines without a usable GPU, so it always
+works — you just don't get GPU acceleration this way.
 
-**Requirements:** Docker Desktop installed. 8 GB RAM recommended for the Vigi AI
-assistant (Mistral 7B Instruct runs locally in Docker).
+</details>
 
 ## Product principles
 
@@ -183,6 +212,12 @@ set `OLLAMA_MODEL` or `OLLAMA_PORT` in `.env`.
 8 GB recommended for responsive performance on personal computers. OpenVigie defaults
 to a 2048-token context and one parallel inference to keep resource usage
 predictable.
+
+**GPU acceleration (optional):** on Windows or Linux with a compatible NVIDIA
+GPU, `./start.sh` / `.\start.ps1` (see [Quickstart](#-quickstart)) detect it
+automatically and roughly halve response time or better. Not available on
+macOS — Docker Desktop cannot expose a GPU to containers there, a
+virtualization limitation rather than something to configure around.
 
 **How Vigi works:** Ollama does not browse the web. The OpenVigie collector
 fetches attributed RSS/Atom news and primary security sources, then Vigi

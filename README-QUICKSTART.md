@@ -20,22 +20,45 @@ git clone https://github.com/Swapshadow/openvigie.git
 cd openvigie
 
 # 2. Démarrer la stack
-docker compose -f docker-compose.prod.yml up -d
-
-# 3. Attendre 2-3 min le démarrage d'Ollama...
-docker compose -f docker-compose.prod.yml logs -f ollama
-
-# 4. Accéder à l'application
-# → http://localhost:3000
+chmod +x start.sh && ./start.sh    # Linux / macOS
+```
+```powershell
+.\start.ps1                         # Windows
 ```
 
-**Alternative avec détection GPU automatique** — `./start.sh` (Linux/macOS) ou
-`.\start.ps1` (Windows) détectent un GPU NVIDIA utilisable et démarrent Vigi avec
-l'accélération matérielle si possible, sinon en CPU normalement. Purement optionnel :
-`docker compose up -d --build` seul continue de fonctionner exactement comme avant,
-toujours en CPU. Voir [Accélération GPU](#-accélération-gpu-nvidia) ci-dessous.
+Cette commande **détecte automatiquement si votre machine a un GPU compatible
+et active l'accélération pour Vigi si possible, sinon démarre en CPU** — dans
+les deux cas, un message clair indique ce qui a été choisi. Comptez 2-3 min au
+premier démarrage (téléchargement du modèle Mistral), puis accédez à
+**http://localhost:3000** (ou **https://localhost**, voir plus bas).
+
+**Windows :** si le script ne détecte pas votre GPU alors que vous en avez un,
+vérifiez qu'un vrai interpréteur Python est installé — `py --version` doit
+afficher un numéro de version. Sur une installation Windows standard,
+`python`/`python3` pointent souvent vers des stubs Microsoft Store non
+fonctionnels plutôt que vers un vrai interpréteur ; installez Python depuis
+[python.org](https://www.python.org/downloads/) si `py --version` échoue aussi.
+
+<details>
+<summary>Sans les scripts, ou à partir des images publiées — <code>docker compose</code> directement (toujours CPU, pas de détection)</summary>
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml logs -f ollama
+```
+
+Fonctionne toujours, même pour qui ignore l'existence de `start.sh`/`start.ps1`
+— c'est d'ailleurs exactement vers quoi ils basculent automatiquement en
+l'absence de GPU utilisable. Utile pour l'automatisation, le CI, ou si vous
+préférez ne pas dépendre du wrapper.
+
+</details>
 
 ## 📋 Détails par OS
+
+`start.sh` / `.\start.ps1` (voir ci-dessus) fonctionnent identiquement sur les
+trois OS et restent la commande recommandée. Les commandes ci-dessous montrent
+l'équivalent manuel, sans détection GPU, à partir des images publiées.
 
 ### macOS
 ```bash
