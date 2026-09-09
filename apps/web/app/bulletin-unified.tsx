@@ -84,7 +84,7 @@ function LeadStory({ article }: { article: LiveArticle }) {
   return (
     <article className={`unified-lead${article.imageUrl ? ' has-media' : ''}`}>
       {article.imageUrl ? <ArticleThumb src={article.imageUrl} alt="" eager /> : null}
-      <div className="unified-lead-copy">
+      <div className="unified-lead-copy"><p className="lead-kicker">À LA UNE <span>↗</span></p>
         <ArticleMeta article={article} />
         <h2><a href={article.url} target="_blank" rel="noreferrer noopener">{article.title}</a></h2>
         {article.excerpt ? <p>{article.excerpt}</p> : null}
@@ -188,6 +188,13 @@ export default function BulletinUnified() {
 
   return (
     <div className="unified">
+      <div className="overview-metrics" aria-label="Indicateurs du bulletin" aria-busy={loading}>
+        <div><span>Articles affichés</span><strong>{data ? visible.length.toString().padStart(2, '0') : '—'}</strong><small>Sélection de la période</small></div>
+        <div><span>Articles avec CVE</span><strong>{data ? withCve.toString().padStart(2, '0') : '—'}</strong><small>Vulnérabilités référencées</small></div>
+        <div><span>Sources disponibles</span><strong>{data ? onlineSources : '—'}<em> / {data ? totalSources : '—'}</em></strong><small>Dernier état de collecte</small></div>
+        <div><span>Dernière actualisation</span><strong className="metric-time">{data ? new Intl.DateTimeFormat('fr-FR', {hour: '2-digit', minute: '2-digit'}).format(new Date(data.generatedAt)) : '—'}</strong><small>{loading ? 'Actualisation en cours…' : error ? 'Actualisation indisponible' : 'Heure locale du bulletin'}</small></div>
+      </div>
+      <div className="feed-section-heading"><h2>Le fil de veille</h2><span>Sources croisées · sélection automatisée</span></div>
       <div className="unified-toolbar">
         <div className="unified-cadence" role="tablist" aria-label="Fenêtre du bulletin">
           {CADENCES.map(([id, label]) => (
@@ -212,11 +219,6 @@ export default function BulletinUnified() {
             aria-label="Filtrer le fil"
           />
         </label>
-        <div className="unified-stats">
-          <span><strong>{visible.length}</strong> affichés</span>
-          <span><strong>{withCve}</strong> avec CVE</span>
-          <span><strong>{onlineSources}/{totalSources}</strong> sources</span>
-        </div>
       </div>
 
       <nav className="unified-filters" aria-label="Filtrer par catégorie">

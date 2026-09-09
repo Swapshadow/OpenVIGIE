@@ -331,3 +331,8 @@ confirmée, sans inclure les CVE ambiguës. Les notifications restent individuel
 jamais un lot à cause d’une limite de 20 notifications. Le reliquat historique
 est regroupé une fois par équipement. Les garanties SMTP restent « au moins une
 fois » en cas de crash entre acceptation SMTP et enregistrement SQLite.
+
+## Contributors
+
+- Jean-Baptiste Terrazzoni ([Swapshadow](https://github.com/Swapshadow)) — project creator and maintainer.
+- **OpenAI Codex** — AI-assisted interface redesign, navigation, responsive dark/light themes and verification (September 2026). Contribution recorded in the commit co-author trailer.

@@ -58,28 +58,31 @@ export default function InventoryWorkspace() {
 
   useEffect(() => {
     const controller = new AbortController();
-    setAvailableVersions([]);
-    setVersionsStale(false);
-    if (!selectedProduct.cpeVendor || !selectedProduct.cpeProduct) return () => controller.abort();
-    setVersionsLoading(true);
-    const params = new URLSearchParams({
-      part: selectedProduct.part,
-      cpeVendor: selectedProduct.cpeVendor,
-      cpeProduct: selectedProduct.cpeProduct,
-    });
-    void fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal })
-      .then(async (response) => {
-        const payload = await response.json() as { versions?: string[]; stale?: boolean; error?: string };
-        if (!response.ok) throw new Error(payload.error ?? 'Versions indisponibles');
-        setAvailableVersions(payload.versions ?? []);
-        setVersionsStale(Boolean(payload.stale));
-      })
-      .catch((error) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
-        setVersionsStale(true);
-      })
-      .finally(() => setVersionsLoading(false));
-    return () => controller.abort();
+    const initial = window.setTimeout(() => {
+      setAvailableVersions([]);
+      setVersionsStale(false);
+      setVersionsLoading(false);
+      if (!selectedProduct.cpeVendor || !selectedProduct.cpeProduct) return;
+      setVersionsLoading(true);
+      const params = new URLSearchParams({
+        part: selectedProduct.part,
+        cpeVendor: selectedProduct.cpeVendor,
+        cpeProduct: selectedProduct.cpeProduct,
+      });
+      void fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal })
+        .then(async (response) => {
+          const payload = await response.json() as { versions?: string[]; stale?: boolean; error?: string };
+          if (controller.signal.aborted) return;
+          if (!response.ok) throw new Error(payload.error ?? 'Versions indisponibles');
+          setAvailableVersions(payload.versions ?? []);
+          setVersionsStale(Boolean(payload.stale));
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setVersionsStale(true);
+        })
+        .finally(() => { if (!controller.signal.aborted) setVersionsLoading(false); });
+    }, 0);
+    return () => { window.clearTimeout(initial); controller.abort(); };
   }, [selectedProduct]);
 
   // Free-text search across the whole catalog: with 55 brands, walking two

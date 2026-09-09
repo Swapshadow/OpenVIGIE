@@ -9,6 +9,7 @@ import BrandRadar from './brand-radar';
 import SettingsMenu from './settings-menu';
 import EmailAlertsConfig from './email-alerts-config';
 import NotificationCenter from './notification-center';
+import { WorkspaceNavigation, type Desk } from './workspace-navigation';
 
 type View = 'bulletin' | 'assets';
 type BulletinTab = 'news' | 'leaks';
@@ -38,7 +39,9 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
   const [settingsView, setSettingsView] = useState<'email' | 'about' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [bulletinTab, setBulletinTab] = useState<BulletinTab>('news');
-  const navigate = (next: View) => { setSettingsView(null); setView(next); };
+  const [desk, setDesk] = useState<Desk>('fil');
+  const navigate = (next: View) => { setSettingsView(null); setView(next); window.scrollTo({ top: 0, behavior: 'auto' }); };
+  const openDesk = (next: Desk) => { navigate('bulletin'); setBulletinTab('news'); setDesk(next); };
   const [cadence] = useState<Cadence>('daily');
   const [theme, setTheme] = useState<Theme>('dark');
 
@@ -72,26 +75,25 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
 
   return (
     <main className="app-shell">
-      <div className="sun" aria-hidden="true"><span /></div>
-      <div className="horizon-grid" aria-hidden="true" />
+      <a className="skip-link" href="#workspace-content">Aller au contenu</a>
 
       <header className="topbar glass-panel">
-        <button className="brand" type="button" aria-label="OpenVigie, retour au bulletin" onClick={() => { navigate('bulletin'); setNotificationsOpen(false); }}>
+        <button className="brand" type="button" aria-label="OpenVigie, retour au bulletin" onClick={() => { openDesk('fil'); setNotificationsOpen(false); }}>
           <span className="brand-mark"><BrandRadar /></span>
-          <span><b>OPEN</b>VIGIE</span>
+          <span><b>open</b>vigie<span className="brand-caption">CYBER INTELLIGENCE</span></span>
         </button>
-        <div className="sync-state"><span aria-hidden="true" />CVE + sources éditoriales en direct</div>
+        <div className="sync-state"><AppIcon name="radar" />Votre espace de veille</div>
         <div className="top-actions">
           <button
             type="button"
             className="icon-button"
             aria-label={theme === 'dark' ? 'Passer au thème clair' : 'Passer au thème sombre'}
-            title={theme === 'dark' ? 'Thème clair (blanc, rouge & or)' : 'Thème sombre'}
+            title={theme === 'dark' ? 'Thème clair' : 'Thème sombre'}
             onClick={toggleTheme}
           >
             <AppIcon name={theme === 'dark' ? 'sun' : 'moon'} />
           </button>
-          <button type="button" className="icon-button" aria-label="Rechercher" onClick={() => navigate('bulletin')}><AppIcon name="search" /></button>
+          <button type="button" className="header-search" onClick={() => openDesk('recherche')}><AppIcon name="search" /><span>Rechercher</span></button>
           <NotificationCenter open={notificationsOpen} onOpenChange={setNotificationsOpen} />
           <SettingsMenu theme={theme} onTheme={toggleTheme} onEmail={() => setSettingsView('email')} onNotifications={() => setNotificationsOpen(true)} onInventory={() => navigate('assets')} onAbout={() => setSettingsView('about')} />
         </div>
@@ -99,46 +101,43 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
 
       <div className="workspace">
         <aside className="sidebar glass-panel" aria-label="Navigation principale">
-          <p className="eyebrow">Navigation</p>
+          <div className="workspace-label"><span>OV</span><div>Espace de travail<small>Veille & infrastructure</small></div></div>
+          <p className="eyebrow">Explorer</p>
           <nav className="nav-list">
-            {[
-              ['bulletin', 'Bulletin'],
-              ['assets', 'Mon parc'],
-            ].map(([id, label]) => (
-              <button
-                className="nav-item"
-                type="button"
-                aria-current={!settingsView && view === id ? 'page' : undefined}
-                key={id}
-                onClick={() => navigate(id as View)}
-              >
-                <span className="nav-icon"><AppIcon name={id as View} /></span><span>{label}</span>
+            {([
+              { id: 'fil', label: 'Vue d’ensemble', icon: 'bulletin' },
+              { id: 'certfr', label: 'Alertes CERT-FR', icon: 'radar' },
+              { id: 'leaks', label: 'Fuites de données', icon: 'leaks' },
+              { id: 'assets', label: 'Mon parc', icon: 'assets' },
+              { id: 'hebdo', label: 'Rapport hebdo', icon: 'bulletin' },
+              { id: 'recherche', label: 'Recherche', icon: 'search' },
+            ] as const).map(({ id, label, icon }) => (
+              <button className="nav-item" type="button" key={id}
+                aria-current={!settingsView && (id === 'assets' ? view === 'assets' : view === 'bulletin' && (id === 'leaks' ? bulletinTab === 'leaks' : bulletinTab === 'news' && desk === id)) ? 'page' : undefined}
+                onClick={() => { if (id === 'assets') navigate('assets'); else if (id === 'leaks') { navigate('bulletin'); setBulletinTab('leaks'); } else openDesk(id); }}>
+                <span className="nav-icon"><AppIcon name={icon} /></span><span>{label}</span>
               </button>
             ))}
           </nav>
+          <div className="sidebar-utility"><p className="eyebrow">Préférences</p><button className="nav-item" type="button" aria-current={settingsView === 'email' ? 'page' : undefined} onClick={() => setSettingsView('email')}><span className="nav-icon"><AppIcon name="notifications" /></span><span>Alertes email</span></button></div>
           <div className="open-source-note">
-            <strong>100 % open source</strong>
-            <span>Pipeline auditable</span>
-            <span>Sources traçables</span>
-            <span>Contributions ouvertes</span>
+            <AppIcon name="radar" /><strong>La veille vous appartient.</strong>
+            <span>Open source. Sources traçables.<br />Intelligence locale avec Vigi.</span>
+            <a href="https://github.com/Swapshadow/openvigie" target="_blank" rel="noopener noreferrer">Explorer le projet ↗</a>
           </div>
         </aside>
 
+        <div id="workspace-content" className="workspace-content" tabIndex={-1}>
+        <WorkspaceNavigation value={desk}>
         {settingsView === 'email' ? <EmailAlertsConfig /> : settingsView === 'about' ? <section className="email-settings glass-panel"><h1>À propos d’OpenVigie</h1><p>Veille de vulnérabilités open source centrée sur votre parc d’équipements.</p><p>Licence AGPL-3.0. Confirmez les correspondances CVE dans les avis éditeurs.</p><a href="https://github.com/Swapshadow/openvigie" target="_blank" rel="noopener noreferrer">Code source et contributions ↗</a></section> : view === 'bulletin' ? (
           <div className="bulletin-view">
-            <div className="tabs bulletin-section-tabs" role="tablist" aria-label="Sections du bulletin">
-              <button type="button" role="tab" aria-selected={bulletinTab === 'news'} onClick={() => setBulletinTab('news')}>
-                Toutes les news
-              </button>
-              <button type="button" role="tab" aria-selected={bulletinTab === 'leaks'} onClick={() => setBulletinTab('leaks')}>
-                Fuites de données
-              </button>
-            </div>
             {bulletinTab === 'news' ? bulletin : <LeakToday />}
           </div>
         ) : (
           <InventoryWorkspace />
         )}
+        </WorkspaceNavigation>
+        </div>
       </div>
 
       <VigiChat cadence={cadence} />
