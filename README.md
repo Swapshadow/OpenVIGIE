@@ -108,6 +108,9 @@ plain-text excerpt, dates, attribution, the original link, and a cover image URL
 (when available). It does not copy article bodies or rewrite source claims. See
 [EDITORIAL_POLICY.md](EDITORIAL_POLICY.md).
 
+<img width="1912" height="948" alt="image" src="https://github.com/user-attachments/assets/2b01acaa-90eb-48ac-b9bd-5afe132f640f" />
+
+
 ## Functional asset monitoring
 
 The **My assets** workspace now lets users:
@@ -135,6 +138,9 @@ changing production infrastructure.
 
 OpenVigie works with the public NVD rate limit. For larger inventories, copy
 `.env.example` to `.env`, add an optional `NVD_API_KEY`, and restart Docker.
+
+<img width="1912" height="948" alt="image" src="https://github.com/user-attachments/assets/0d7d1f12-a4fb-45fb-bec0-afb0d58693ff" />
+
 
 ## Live sources
 
@@ -203,6 +209,8 @@ is required on Windows, Linux, or macOS. Start the complete stack normally:
 ```bash
 docker compose up -d --build
 ```
+<img width="475" height="494" alt="image" src="https://github.com/user-attachments/assets/c16d7df2-857f-4525-a478-7e22bcfd5116" />
+
 
 The `ollama-model` initialization container downloads the model on first start;
 subsequent starts reuse the `openvigie_ollama` Docker volume. Ollama is exposed
