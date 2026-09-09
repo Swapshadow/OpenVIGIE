@@ -13,6 +13,8 @@ detection templates, and remediation guidance.
 > demonstration content. OpenVigie must not be treated as a production
 > vulnerability assessment or as an automatically verified newsroom.
 
+<img width="1912" height="948" alt="image" src="https://github.com/user-attachments/assets/cec79bda-6edf-4286-a586-f277a3e06af9" />
+
 ## 🚀 Quickstart
 
 Get OpenVigie running in 3 commands:
