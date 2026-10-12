@@ -6,6 +6,11 @@ import collector
 MAC = dict(vendor='Apple', product='macOS', version='26.6.1', part='o', cpeVendor='apple', cpeProduct='macos')
 FORTI = dict(vendor='Fortinet', product='FortiOS / FortiGate', version='7.6.3', part='o', cpeVendor='fortinet', cpeProduct='fortios')
 VMWARE = dict(vendor='VMware by Broadcom', product='VMware ESXi', version='7.0.3', part='o', cpeVendor='vmware', cpeProduct='esxi')
+GLPI = dict(vendor='GLPI Project', product='GLPI', version='11.0.11', part='a', cpeVendor='glpi-project', cpeProduct='glpi')
+ZABBIX = dict(vendor='Zabbix', product='Zabbix', version='7.4.12', part='a', cpeVendor='zabbix', cpeProduct='zabbix')
+WINDOWS_SERVER = dict(vendor='Microsoft', product='Windows Server', version='2022 21H2', part='o', cpeVendor='microsoft', cpeProduct='windows_server_2022')
+UBUNTU = dict(vendor='Canonical Ubuntu', product='Ubuntu Linux', version='24.04.5 LTS', part='o', cpeVendor='canonical', cpeProduct='ubuntu_linux')
+DEBIAN = dict(vendor='Debian', product='Debian GNU/Linux', version='12.0', part='o', cpeVendor='debian', cpeProduct='debian_linux')
 
 def entry(query, version='*', **bounds):
     return dict(vulnerable=True, criteria=f"cpe:2.3:o:{query['cpeVendor']}:{query['cpeProduct']}:{version}:*:*:*:*:*:*:*", **bounds)
@@ -14,6 +19,49 @@ def cve(*matches):
     return dict(id='CVE-2026-10000', configurations=[dict(nodes=[dict(operator='OR', cpeMatch=list(matches))])])
 
 class MatchingTests(unittest.TestCase):
+    def test_requested_release_labels_map_to_nvd_cpe_versions(self):
+        self.assertIn(':microsoft:windows_server_2022:10.0.20348.0:', collector.cpe_queries(WINDOWS_SERVER)[0])
+        self.assertIn(':canonical:ubuntu_linux:24.04:', collector.cpe_queries(UBUNTU)[0])
+        self.assertIn(':zabbix:zabbix:7.4.12:', collector.cpe_queries(ZABBIX)[0])
+
+        windows_match = dict(vulnerable=True, criteria='cpe:2.3:o:microsoft:windows_server_2022:*:*:*:*:*:*:*:*',
+                             versionStartIncluding='10.0.20348.0', versionEndExcluding='10.0.20348.230')
+        ubuntu_match = dict(vulnerable=True, criteria='cpe:2.3:o:canonical:ubuntu_linux:24.04:*:*:*:lts:*:*:*')
+        zabbix_match = dict(vulnerable=True, criteria='cpe:2.3:a:zabbix:zabbix:7.4.12:-:*:*:*:*:*:*')
+        self.assertEqual(collector.cve_confidence(cve(windows_match), WINDOWS_SERVER), 'confirmed')
+        self.assertEqual(collector.cve_confidence(cve(ubuntu_match), UBUNTU), 'confirmed')
+        self.assertEqual(collector.cve_confidence(cve(zabbix_match), ZABBIX), 'confirmed')
+
+    def test_glpi_version_missing_from_dictionary_uses_bounded_product_fallback(self):
+        affected = dict(vulnerable=True, criteria='cpe:2.3:a:glpi-project:glpi:*:*:*:*:*:*:*:*',
+                        versionStartIncluding='11.0.10', versionEndExcluding='11.0.12')
+        wrapper = {'cve': {**cve(affected), 'id': 'CVE-2026-11011'}}
+        with patch.object(collector, 'fetch_json', side_effect=[
+                {'totalResults': 0, 'vulnerabilities': []},
+                {'totalResults': 1, 'vulnerabilities': [wrapper]},
+        ]) as fetch, patch.object(collector, 'get_kev', return_value={}):
+            result = collector.collect(GLPI)
+        self.assertEqual([item['id'] for item in result['vulnerabilities']], ['CVE-2026-11011'])
+        self.assertEqual(fetch.call_count, 2)
+        self.assertIn('glpi-project%3Aglpi', fetch.call_args.args[0])
+        self.assertNotIn('11.0.11', fetch.call_args.args[0])
+
+    def test_debian_inventory_lookup_is_nvd_only(self):
+        affected = entry(DEBIAN, '12.0')
+        wrapper = {'cve': {**cve(affected), 'id': 'CVE-2026-12000'}}
+        with patch.object(collector, 'fetch_json', return_value={
+                'totalResults': 1, 'vulnerabilities': [wrapper],
+        }), patch.object(collector, 'get_kev') as kev:
+            result = collector.collect(DEBIAN)
+        kev.assert_not_called()
+        self.assertEqual([source['name'] for source in result['sources']], ['NVD / NIST'])
+        self.assertIsNone(result['vulnerabilities'][0]['kev'])
+
+        with patch.object(collector, 'related_articles') as articles:
+            enriched = collector.attach_related_articles(result, DEBIAN)
+        articles.assert_not_called()
+        self.assertEqual(enriched['relatedArticles'], [])
+
     def test_macos_modern_version_excludes_historical_ranges(self):
         for upper in ('10.15.7', '12.7', '14.6', '26.6.1'):
             self.assertEqual(collector.cve_confidence(cve(entry(MAC, versionEndExcluding=upper)), MAC), 'excluded')

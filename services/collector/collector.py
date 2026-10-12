@@ -37,6 +37,8 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434").rstri
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "mistral:7b-instruct")
 HTTP_TIMEOUT = 25
 MAX_RESULTS = 100
+MAX_PRODUCT_FALLBACK_RESULTS = 500
+PRODUCT_RANGE_FALLBACKS = frozenset({('a', 'glpi-project', 'glpi')})
 MAX_FEED_BYTES = 2_000_000
 SAFE_TEXT = re.compile(r"^[\w .+()/,:-]*$", re.UNICODE)
 CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
@@ -2729,11 +2731,17 @@ def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
     if payload.get('matchingPolicy') != MATCHING_POLICY:
         enriched['vulnerabilities'] = []
         enriched['totalResults'] = 0
-    enriched["relatedArticles"] = related_articles(query, enriched.get("vulnerabilities", []))
+    # Debian inventory monitoring is deliberately NVD-only. General news feeds
+    # remain available in the bulletin, but are never consulted or attached to
+    # a Debian vulnerability snapshot.
+    if nvd_only_query(query):
+        enriched["relatedArticles"] = []
+    else:
+        enriched["relatedArticles"] = related_articles(query, enriched.get("vulnerabilities", []))
     return enriched
 
 
-MATCHING_POLICY = 5
+MATCHING_POLICY = 6
 
 # Last resort ONLY. An entry here bypasses the structured-CPE rule of policy 3
 # and asserts an (installed >= lower, installed < upper) window from a primary
@@ -2770,9 +2778,28 @@ def vmware_release(value: str) -> tuple[str, str] | None:
 
 def canonical_cpe_version(vendor: str, product: str, version: str) -> str:
     """Resolve documented product renames while retaining exact CPE matching."""
-    if vendor.lower() == 'oracle' and product.lower() == 'database_server' and version.lower() == '23c':
+    vendor, product, normalized = vendor.lower(), product.lower(), version.strip().lower()
+    if vendor == 'oracle' and product == 'database_server' and normalized == '23c':
         return '23ai'
+    if vendor == 'canonical' and product == 'ubuntu_linux':
+        # Ubuntu point releases (for example 24.04.5 LTS) share the NVD CPE for
+        # their LTS series (24.04, edition=lts). Keep the installed label in the
+        # UI while querying and matching the structured NVD series identity.
+        match = re.fullmatch(r'(\d+\.\d+)(?:\.\d+)?(?:\s+lts)?', normalized)
+        if match:
+            return match.group(1)
+    if vendor == 'microsoft' and product == 'windows_server_2022':
+        # Windows Server 2022 is the LTSC release based on 21H2. NVD expresses
+        # patch applicability with build ranges rooted at build 20348 rather
+        # than with a literal "21H2" CPE version.
+        if normalized in ('2022', '21h2', '2022 21h2', '2022, 21h2'):
+            return '10.0.20348.0'
     return version
+
+
+def nvd_only_query(query: dict[str, str]) -> bool:
+    """Return whether an inventory query must avoid every non-NVD enrichment."""
+    return (query.get('cpeVendor', '').lower(), query.get('cpeProduct', '').lower()) == ('debian', 'debian_linux')
 
 
 def cpe_queries(query: dict[str, str]) -> list[str]:
@@ -2831,7 +2858,7 @@ def cve_confidence(cve: dict, query: dict) -> str:
             exact = re.sub(r'\\(.)', r'\1', cpe_version).lower()
             if sql_family and cpe_product.lower() == f'sql_server_{version}':
                 return True
-            if exact == installed_version and cpe_update == '*':
+            if exact == installed_version and cpe_update in ('*', '-'):
                 return True
             release = vmware_release(version) if vmware_esxi else None
             return bool(release and exact == release[0]
@@ -2906,22 +2933,47 @@ def collect(query: dict[str, str]) -> dict:
 
     candidates_by_id = {}
     nvd_total = 0
-    for cpe in cpes:
+
+    def fetch_candidates(cpe: str, limit: int | None = None) -> tuple[list[dict], int]:
         try:
-            nvd = fetch_json(nvd_url(cpe))
+            payload = fetch_json(nvd_url(cpe))
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
-            nvd = {'totalResults': 0, 'vulnerabilities': []}
-        page_candidates = list(nvd.get("vulnerabilities", []))
-        while len(page_candidates) < nvd.get("totalResults", 0):
-            page = fetch_json(nvd_url(cpe, len(page_candidates)))
-            batch = page.get("vulnerabilities", [])
+            payload = {'totalResults': 0, 'vulnerabilities': []}
+        total = payload.get('totalResults', len(payload.get('vulnerabilities', [])))
+        if limit is not None and total > limit:
+            return [], total
+        rows = list(payload.get('vulnerabilities', []))
+        while len(rows) < total:
+            page = fetch_json(nvd_url(cpe, len(rows)))
+            batch = page.get('vulnerabilities', [])
             if not batch:
                 raise RuntimeError("Pagination NVD incomplète")
-            page_candidates.extend(batch)
-        nvd_total += nvd.get("totalResults", len(page_candidates))
+            rows.extend(batch)
+        return rows, total
+
+    for cpe in cpes:
+        page_candidates, total = fetch_candidates(cpe)
+        nvd_total += total
         for candidate in page_candidates:
+            if candidate.get('cve', {}).get('id'):
+                candidates_by_id[candidate['cve']['id']] = candidate
+
+    # A newly released patch can be absent from the CPE dictionary even though
+    # NVD already publishes product-level version ranges that cover it. When an
+    # exact lookup is empty, retrieve the bounded product history and still let
+    # cve_confidence() enforce the strict structured-CPE/version test. The cap
+    # prevents broad products such as Windows from causing an unbounded scan.
+    fallback_identity = (query['part'], query['cpeVendor'].lower(), query['cpeProduct'].lower())
+    if not candidates_by_id and fallback_identity in PRODUCT_RANGE_FALLBACKS:
+        product_cpe = (
+            f"cpe:2.3:{query['part']}:{cpe_component(query['cpeVendor'])}:"
+            f"{cpe_component(query['cpeProduct'])}:*:*:*:*:*:*:*:*"
+        )
+        fallback_candidates, fallback_total = fetch_candidates(product_cpe, MAX_PRODUCT_FALLBACK_RESULTS)
+        nvd_total += fallback_total
+        for candidate in fallback_candidates:
             if candidate.get('cve', {}).get('id'):
                 candidates_by_id[candidate['cve']['id']] = candidate
     candidates = list(candidates_by_id.values())
@@ -2935,12 +2987,15 @@ def collect(query: dict[str, str]) -> dict:
         "name": "NVD / NIST", "status": "online", "url": "https://nvd.nist.gov/",
         "detail": "Correspondance CPE structurée et version explicitement couverte",
     }]
-    try:
-        kev = get_kev()
-        sources.append({"name": "CISA KEV", "status": "online", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "detail": "Catalogue des vulnérabilités exploitées"})
-    except Exception:
+    if nvd_only_query(query):
         kev = {}
-        sources.append({"name": "CISA KEV", "status": "degraded", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "detail": "Source temporairement indisponible"})
+    else:
+        try:
+            kev = get_kev()
+            sources.append({"name": "CISA KEV", "status": "online", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "detail": "Catalogue des vulnérabilités exploitées"})
+        except Exception:
+            kev = {}
+            sources.append({"name": "CISA KEV", "status": "degraded", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "detail": "Source temporairement indisponible"})
 
     vulnerabilities = []
     for item in candidates:

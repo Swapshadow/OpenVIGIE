@@ -265,7 +265,7 @@ export const vendorCatalog: VendorDefinition[] = [
   },
   {
     id: 'debian', name: 'Debian', short: 'DEB', products: [
-      { id: 'debian-linux', name: 'Debian GNU/Linux', family: 'Système Linux', part: 'o', cpeVendor: 'debian', cpeProduct: 'debian_linux', advisoryUrl: 'https://www.debian.org/security/' },
+      { id: 'debian-linux', name: 'Debian GNU/Linux', family: 'Système Linux', part: 'o', cpeVendor: 'debian', cpeProduct: 'debian_linux', advisoryUrl: 'https://nvd.nist.gov/vuln/search' },
     ],
   },
   {
@@ -411,6 +411,19 @@ export const vendorCatalog: VendorDefinition[] = [
         cpeVendor: 'glpi-project', cpeProduct: 'glpi',
 
         advisoryUrl: 'https://github.com/glpi-project/glpi/security/advisories',
+      },
+    ],
+  },
+  {
+    id: 'zabbix',
+    name: 'Zabbix',
+    short: 'ZX',
+    products: [
+      {
+        id: 'zabbix', name: 'Zabbix', family: 'Supervision', part: 'a',
+        cpeVendor: 'zabbix', cpeProduct: 'zabbix',
+
+        advisoryUrl: 'https://www.zabbix.com/security_advisories',
       },
     ],
   },
