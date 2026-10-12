@@ -9,6 +9,8 @@ const expected = [
   ['SimpliVity OmniStack for Cisco', 'hp', 'simplivity_omnistack_for_cisco_firmware'],
   ['Microsoft SQL Server', 'microsoft', 'sql_server'],
   ['Oracle Database', 'oracle', 'database_server'],
+  ['Zabbix', 'zabbix', 'zabbix'],
+  ['Backup & Replication', 'veeam', 'backup_and_replication'],
 ];
 
 for (const [name, vendor, product] of expected) {
