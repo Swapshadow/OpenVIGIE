@@ -483,7 +483,7 @@ export default function InventoryWorkspace() {
 
               <div className="source-ribbon">
                 <div><span>Dernière collecte</span><strong>{data ? formatDate(data.fetchedAt) : 'En attente'}</strong></div>
-                <div><span>Correspondance</span><strong>{data?.matching.method === 'cpe' ? 'CPE + version exacte' : data?.matching.message ?? 'En attente'}</strong></div>
+                <div><span>Correspondance</span><strong>{data?.matching.method === 'cpe' ? data.matching.usesNvdAffected ? 'CPE + plages NVD' : 'CPE + version' : data?.matching.message ?? 'En attente'}</strong></div>
                 <div><span>Résultats NVD</span><strong>{data?.totalResults ?? '—'}</strong></div>
                 <div><span>Exploitées (KEV)</span><strong>{data?.vulnerabilities.filter((item) => item.kev).length ?? '—'}</strong></div>
               </div>
@@ -526,7 +526,7 @@ export default function InventoryWorkspace() {
               <div className="monitor-body">
                 <aside className="vulnerability-list" aria-label="Vulnérabilités correspondantes">
                   {loading && !data && <div className="loading-state"><i /><span>Interrogation des sources officielles…</span></div>}
-                  {!loading && data && filteredVulnerabilities.length === 0 && <div className="no-results"><strong>Aucun résultat</strong><span>{data.matching.method === 'none' ? data.matching.message : 'Aucune CVE avec un CPE structuré couvrant explicitement cette version.'}</span></div>}
+                  {!loading && data && filteredVulnerabilities.length === 0 && <div className="no-results"><strong>Aucun résultat</strong><span>{data.matching.method === 'none' ? data.matching.message : 'Aucune CVE avec un CPE ou une plage de versions NVD couvrant cette version.'}</span></div>}
                   {filteredVulnerabilities.map((cve) => (
                     <button type="button" className="vulnerability-row" aria-current={selectedCve?.id === cve.id ? 'true' : undefined} onClick={() => setSelectedCveId(cve.id)} key={cve.id}>
                       <span className="cve-line"><strong>{cve.id}</strong>{cve.kev && <em>KEV</em>}</span>
@@ -545,7 +545,7 @@ export default function InventoryWorkspace() {
 
               <footer className="source-status-bar">
                 {(data?.sources ?? []).map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.name}><i data-status={source.status} /><span>{source.name}</span><small>{source.detail}</small></a>)}
-                <span className="matching-warning">Seules les CVE avec un CPE structuré couvrant explicitement la version sont associées au parc.</span>
+                <span className="matching-warning">Correspondance par CPE ou plage de versions structurée NVD ; confirmez le composant et la version installés.</span>
               </footer>
             </section>
           )}
@@ -563,7 +563,7 @@ function CveDossier({ cve, productName, advisoryUrl, tab, onTab }: { cve: Vulner
     <>
       <header className="live-dossier-heading">
         <div><p>{cve.id}</p><h2>{productName}</h2><span>Publié {formatDate(cve.published)} · modifié {formatDate(cve.lastModified)}</span></div>
-        <div className="badges"><span className="badge critical">{cve.severity} {cve.score ?? '—'}</span>{cve.kev && <span className="badge critical">CISA KEV</span>}<span className="badge cyan">{cve.attackVector ?? 'Vecteur inconnu'}</span></div>
+        <div className="badges"><span className="badge critical">{cve.severity} {cve.score ?? '—'}</span>{cve.kev && <span className="badge critical">CISA KEV</span>}<span className="badge cyan">{cve.matchBasis === 'nvd_affected' ? 'Plage éditeur dans NVD' : cve.matchBasis === 'primary_advisory' ? 'Avis éditeur' : 'CPE NVD'}</span><span className="badge cyan">{cve.attackVector ?? 'Vecteur inconnu'}</span></div>
       </header>
       <p className="cve-description">{cve.description}</p>
       <div className="tabs compact-tabs" role="tablist" aria-label="Détails de la vulnérabilité">
@@ -617,7 +617,7 @@ function DeepPatchPanel({ cve, asset, productName, advisoryUrl }: { cve: Vulnera
   const fixRef = cve.references.find((reference) => reference.tags.some((tag) => ['Patch', 'Vendor Advisory', 'Mitigation'].includes(tag)));
   return <section className="deep-patch-panel" aria-labelledby="deep-patch-title">
     <header><div><span>REMÉDIATION GUIDÉE · {asset.label}</span><h3 id="deep-patch-title">Patch en profondeur</h3><p>{cve.id} · {productName} · version installée {asset.version || 'non précisée'}</p></div><strong data-severity={cve.severity}>{cve.severity} · {cve.score ?? '—'}</strong></header>
-    <div className="deep-patch-grid"><article><b>01 · Confirmer</b><h4>Vérifier l’exposition</h4><p>Comparez la version installée, le rôle de l’équipement et son exposition avec l’avis éditeur. Une correspondance CPE ne remplace pas cette vérification.</p></article><article><b>02 · Choisir</b><h4>Version corrigée ou contournement</h4><p>{cve.kev ? `La CISA demande : ${cve.kev.requiredAction}` : 'Utilisez la version corrigée publiée par l’éditeur ou son contournement officiellement documenté.'}</p></article><article><b>03 · Préparer</b><h4>Réduire le risque pendant l’intervention</h4><p>Préparez une sauvegarde, une fenêtre de maintenance, un accès de secours et la rotation des secrets si l’avis le recommande.</p></article><article><b>04 · Valider</b><h4>Contrôler après mise à jour</h4><p>Vérifiez la version, les journaux, les services exposés et l’absence d’indicateur de compromission. Documentez la preuve de clôture.</p></article></div>
+    <div className="deep-patch-grid"><article><b>01 · Confirmer</b><h4>Vérifier l’exposition</h4><p>Comparez la version installée, le rôle de l’équipement et son exposition avec l’avis éditeur. Une correspondance NVD ne remplace pas cette vérification.</p></article><article><b>02 · Choisir</b><h4>Version corrigée ou contournement</h4><p>{cve.kev ? `La CISA demande : ${cve.kev.requiredAction}` : 'Utilisez la version corrigée publiée par l’éditeur ou son contournement officiellement documenté.'}</p></article><article><b>03 · Préparer</b><h4>Réduire le risque pendant l’intervention</h4><p>Préparez une sauvegarde, une fenêtre de maintenance, un accès de secours et la rotation des secrets si l’avis le recommande.</p></article><article><b>04 · Valider</b><h4>Contrôler après mise à jour</h4><p>Vérifiez la version, les journaux, les services exposés et l’absence d’indicateur de compromission. Documentez la preuve de clôture.</p></article></div>
     <footer><span>Lecture défensive : {cve.attackVector ?? 'vecteur non renseigné'} · privilèges {cve.privilegesRequired ?? 'non renseignés'} · interaction {cve.userInteraction ?? 'non renseignée'}</span><div><a href={advisoryUrl} target="_blank" rel="noreferrer">Avis éditeur ↗</a>{fixRef ? <a href={fixRef.url} target="_blank" rel="noreferrer">Référence corrective ↗</a> : null}<a href={`https://nvd.nist.gov/vuln/detail/${cve.id}`} target="_blank" rel="noreferrer">Fiche NVD ↗</a></div></footer>
   </section>;
 }

@@ -274,7 +274,7 @@ explicite, documentée et appliquée de façon cohérente dans `compose.yaml`,
 silencieusement `mistral:7b-instruct`.
 
 
-## Règle de non-régression : corrélation CPE exclusivement (politique 3)
+## Règle de non-régression : corrélation structurée NVD (politique 7)
 
 Une CVE ne peut être associée à un équipement que si au moins un élément NVD
 `configurations/cpeMatch` remplit simultanément toutes ces conditions :
@@ -288,14 +288,26 @@ Une CVE ne peut être associée à un équipement que si au moins un élément N
 Un CPE avec version `*` sans borne ne couvre aucune version déterminée pour
 OpenVigie. Les versions absentes, `-`, non comparables, les CPE incomplets et les
 configurations ambiguës sont exclus, jamais affichés comme « à vérifier » dans le
-parc. Il est interdit d’utiliser le titre, la description, le résumé, le vendeur,
-le produit ou un `keywordSearch` pour associer une CVE à un équipement.
+parc.
 
-Les recherches textuelles restent autorisées dans les outils explicitement dédiés
-à la recherche d’articles ou à la veille manuelle, mais elles ne doivent alimenter
-ni la liste CVE du parc, ni sa matrice, ni Vigi, ni les notifications ou emails.
+Exception étroite pour une fiche NVD sans `configurations` : ses données CNA
+structurées `affected/affectedData` peuvent confirmer la correspondance si
+`vendor` et `product` sont exactement ceux du CPE de l'équipement et si une
+plage de versions explicite, comparable et de statut `affected` couvre la version
+installée. Les jokers, versions inconnues et changements de statut ambigus sont
+exclus. Une recherche `keywordSearch` peut découvrir des fiches candidates,
+mais ne constitue jamais une preuve de correspondance ; seules les données
+structurées ci-dessus peuvent alimenter le parc.
+
+Il est interdit d’utiliser le titre, la description ou le résumé d'une CVE pour
+confirmer une correspondance produit-version.
+
+Hors découverte de candidats NVD filtrés par la règle structurée ci-dessus,
+les recherches textuelles restent réservées à la recherche d’articles et à la
+veille manuelle ; elles ne doivent alimenter ni la liste CVE du parc, ni sa
+matrice, ni Vigi, ni les notifications ou emails.
 Les articles liés à un équipement ne le sont que par intersection avec un identifiant
-CVE déjà confirmé par la règle CPE ci-dessus.
+CVE déjà confirmé par les règles structurées ci-dessus.
 
 ## Règle de non-régression : shell et navigation persistants
 

@@ -240,7 +240,7 @@ export const vendorCatalog: VendorDefinition[] = [
   },
   {
     id: 'veeam', name: 'Veeam', short: 'VB', products: [
-      { id: 'backup-replication', name: 'Backup & Replication', family: 'Sauvegarde', part: 'a', advisoryUrl: 'https://www.veeam.com/kb4649' },
+      { id: 'backup-replication', name: 'Backup & Replication', family: 'Sauvegarde', part: 'a', cpeVendor: 'veeam', cpeProduct: 'backup_and_replication', advisoryUrl: 'https://www.veeam.com/kb4738' },
     ],
   },
   {

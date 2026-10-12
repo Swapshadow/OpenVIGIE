@@ -38,7 +38,11 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "mistral:7b-instruct")
 HTTP_TIMEOUT = 25
 MAX_RESULTS = 100
 MAX_PRODUCT_FALLBACK_RESULTS = 500
-PRODUCT_RANGE_FALLBACKS = frozenset({('a', 'glpi-project', 'glpi')})
+PRODUCT_RANGE_FALLBACKS = frozenset({('a', 'glpi-project', 'glpi'), ('a', 'veeam', 'backup_and_replication')})
+STRUCTURED_AFFECTED_KEYWORDS = {
+    ('a', 'glpi-project', 'glpi'): 'GLPI',
+    ('a', 'veeam', 'backup_and_replication'): 'Veeam',
+}
 MAX_FEED_BYTES = 2_000_000
 SAFE_TEXT = re.compile(r"^[\w .+()/,:-]*$", re.UNICODE)
 CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
@@ -2741,9 +2745,9 @@ def attach_related_articles(payload: dict, query: dict[str, str]) -> dict:
     return enriched
 
 
-MATCHING_POLICY = 6
+MATCHING_POLICY = 7
 
-# Last resort ONLY. An entry here bypasses the structured-CPE rule of policy 3
+# Last resort ONLY. An entry here bypasses the structured-NVD rule of policy 7
 # and asserts an (installed >= lower, installed < upper) window from a primary
 # vendor or national CERT advisory. It is legitimate strictly when NVD carries
 # no usable `vendor:product` cpeMatch for that CVE at all (CVE reserved-but-
@@ -2910,6 +2914,63 @@ def primary_advisory_confidence(cve_id: str, query: dict) -> str:
     return 'confirmed' if compared is not None and compared < 0 else 'excluded'
 
 
+def nvd_affected_version_matches(installed: str, entry: dict) -> bool:
+    """Match only explicit, comparable NVD CNA version data; never CVE prose."""
+    if entry.get('status') != 'affected' or entry.get('changes'):
+        return False
+    declared = str(entry.get('version', '')).strip()
+    if not declared or declared.lower() in ('*', 'n/a', 'unknown'):
+        return False
+    if 'lessThan' in entry or 'lessThanOrEqual' in entry:
+        lower = compare_versions(installed, declared)
+        if lower is None or lower < 0:
+            return False
+        if 'lessThan' in entry:
+            upper = compare_versions(installed, str(entry['lessThan']))
+            return upper is not None and upper < 0
+        upper = compare_versions(installed, str(entry['lessThanOrEqual']))
+        return upper is not None and upper <= 0
+    if declared.startswith(('>', '<', '=')):
+        clauses = [part.strip() for part in declared.split(',')]
+        if not clauses:
+            return False
+        for clause in clauses:
+            parsed = re.fullmatch(r'(>=|<=|==|>|<|=)\s*([0-9][0-9A-Za-z._+-]*)', clause)
+            if not parsed:
+                return False
+            operator, bound = parsed.groups()
+            compared = compare_versions(installed, bound)
+            if compared is None or not {
+                '>': compared > 0, '>=': compared >= 0,
+                '<': compared < 0, '<=': compared <= 0,
+                '=': compared == 0, '==': compared == 0,
+            }[operator]:
+                return False
+        return True
+    compared = compare_versions(installed, declared)
+    return compared == 0
+
+
+def nvd_affected_confidence(cve: dict, query: dict) -> str:
+    """Use NVD's structured CNA ranges only when no CPE configuration exists."""
+    if cve.get('vulnStatus') == 'Rejected' or cve.get('configurations'):
+        return 'excluded'
+    vendor = query.get('cpeVendor', '').lower()
+    product = query.get('cpeProduct', '').lower()
+    installed = query.get('version', '')
+    if not vendor or not product or not installed:
+        return 'excluded'
+    for affected in cve.get('affected', []):
+        for item in affected.get('affectedData', []):
+            affected_vendor = str(item.get('vendor', '')).lower()
+            affected_product = re.sub(r'[\s_]+', '', str(item.get('product', '')).lower())
+            if (affected_vendor, affected_product) != (vendor, re.sub(r'[\s_]+', '', product)):
+                continue
+            if any(nvd_affected_version_matches(installed, version) for version in item.get('versions', [])):
+                return 'confirmed'
+    return 'excluded'
+
+
 def collect(query: dict[str, str]) -> dict:
     use_cpe = bool(query["cpeVendor"] and query["cpeProduct"] and query["version"])
     if not use_cpe:
@@ -2976,6 +3037,24 @@ def collect(query: dict[str, str]) -> dict:
         for candidate in fallback_candidates:
             if candidate.get('cve', {}).get('id'):
                 candidates_by_id[candidate['cve']['id']] = candidate
+    # NVD's CPE search omits Deferred records even when their structured CNA
+    # `affected` ranges identify an installed product release. Keyword search is
+    # only candidate discovery; nvd_affected_confidence checks the exact vendor,
+    # product and version range before a CVE can enter the inventory snapshot.
+    affected_keyword = STRUCTURED_AFFECTED_KEYWORDS.get(fallback_identity)
+    if affected_keyword:
+        keyword_url = NVD_API + '?' + urllib.parse.urlencode({
+            'keywordSearch': affected_keyword, 'resultsPerPage': MAX_PRODUCT_FALLBACK_RESULTS,
+        })
+        keyword_payload = fetch_json(keyword_url)
+        keyword_total = keyword_payload.get('totalResults', 0)
+        if keyword_total > MAX_PRODUCT_FALLBACK_RESULTS:
+            raise RuntimeError(f'Recherche NVD {affected_keyword} incomplète : limite de résultats dépassée')
+        nvd_total += keyword_total
+        for candidate in keyword_payload.get('vulnerabilities', []):
+            cve = candidate.get('cve', {})
+            if cve.get('id') and nvd_affected_confidence(cve, query) == 'confirmed':
+                candidates_by_id[cve['id']] = candidate
     candidates = list(candidates_by_id.values())
     for (vendor, product, cve_id), _ in PRIMARY_ADVISORY_RANGES.items():
         if vendor == query['cpeVendor'].lower() and product == query['cpeProduct'].lower() and cve_id not in candidates_by_id:
@@ -2985,7 +3064,7 @@ def collect(query: dict[str, str]) -> dict:
 
     sources = [{
         "name": "NVD / NIST", "status": "online", "url": "https://nvd.nist.gov/",
-        "detail": "Correspondance CPE structurée et version explicitement couverte",
+        "detail": "Correspondance CPE ou plage de versions structurée publiée dans NVD",
     }]
     if nvd_only_query(query):
         kev = {}
@@ -2998,18 +3077,27 @@ def collect(query: dict[str, str]) -> dict:
             sources.append({"name": "CISA KEV", "status": "degraded", "url": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", "detail": "Source temporairement indisponible"})
 
     vulnerabilities = []
+    match_methods = set()
     for item in candidates:
         if not item.get('cve'):
             continue
         confidence = cve_confidence(item['cve'], query)
+        match_basis = 'nvd_cpe'
+        if confidence == 'excluded':
+            confidence = nvd_affected_confidence(item['cve'], query)
+            match_basis = 'nvd_affected'
         if confidence == 'excluded':
             confidence = primary_advisory_confidence(item['cve'].get('id', ''), query)
+            match_basis = 'primary_advisory'
         if confidence != 'excluded':
-            vulnerabilities.append({**normalize_cve(item['cve'], kev), 'confidence': confidence})
+            vulnerabilities.append({**normalize_cve(item['cve'], kev), 'confidence': confidence,
+                                    'matchBasis': match_basis})
+            match_methods.add(match_basis)
     vulnerabilities.sort(key=lambda item: (bool(item["kev"]), item["score"] or 0), reverse=True)
     return {
         "asset": {"vendor": query["vendor"], "product": query["product"], "version": query["version"]},
-        "matching": {"method": method, "confidence": "high", "query": cpes[0], "queries": cpes},
+        "matching": {"method": method, "confidence": "high", "query": cpes[0], "queries": cpes,
+                     "usesNvdAffected": 'nvd_affected' in match_methods},
         "vulnerabilities": vulnerabilities,
         "totalResults": len(vulnerabilities),
         "nvdTotalResults": nvd_total,
