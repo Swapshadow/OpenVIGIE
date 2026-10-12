@@ -44,7 +44,7 @@ STRUCTURED_AFFECTED_KEYWORDS = {
     ('a', 'veeam', 'backup_and_replication'): 'Veeam',
 }
 MAX_FEED_BYTES = 2_000_000
-SAFE_TEXT = re.compile(r"^[\w .+()/,:-]*$", re.UNICODE)
+SAFE_TEXT = re.compile(r"^[\w .+&()/,:-]*$", re.UNICODE)
 CVE_PATTERN = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
 # Words that appear in product names but identify no product. "Stormshield
 # Network Security" must correlate on "stormshield", never on "security", or a

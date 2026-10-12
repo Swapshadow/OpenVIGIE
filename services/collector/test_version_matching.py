@@ -20,6 +20,14 @@ def cve(*matches):
     return dict(id='CVE-2026-10000', configurations=[dict(nodes=[dict(operator='OR', cpeMatch=list(matches))])])
 
 class MatchingTests(unittest.TestCase):
+    def test_catalog_product_name_with_ampersand_is_valid(self):
+        query = collector.normalize_query({
+            'vendor': ['Veeam'], 'product': ['Backup & Replication'],
+            'version': ['13.0.2.29'], 'part': ['a'],
+            'cpeVendor': ['veeam'], 'cpeProduct': ['backup_and_replication'],
+        })
+        self.assertEqual(query['product'], 'Backup & Replication')
+
     def test_requested_release_labels_map_to_nvd_cpe_versions(self):
         self.assertIn(':microsoft:windows_server_2022:10.0.20348.0:', collector.cpe_queries(WINDOWS_SERVER)[0])
         self.assertIn(':canonical:ubuntu_linux:24.04:', collector.cpe_queries(UBUNTU)[0])
