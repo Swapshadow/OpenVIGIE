@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 import sqlite3
 import threading
@@ -416,6 +417,9 @@ kev_lock = threading.Lock()
 kev_cache: tuple[float, dict[str, dict]] | None = None
 nvd_rate_lock = threading.Lock()
 last_nvd_request = 0.0
+version_refresh_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='cpe-versions')
+version_refresh_pending: set[tuple[str, str, str]] = set()
+version_refresh_guard = threading.Lock()
 SESSION_SECONDS = 30 * 86400
 PASSWORD_MIN_LENGTH = 12
 ASSET_KINDS = frozenset({'server', 'workstation', 'switch', 'router', 'firewall', 'phone', 'cloud', 'service'})
@@ -2766,7 +2770,7 @@ def fetch_dictionary_versions(part: str, vendor: str, product: str) -> list[str]
         start = 0
         while True:
             url = NVD_CPE_API + '?' + urllib.parse.urlencode({
-                'cpeMatchString': pattern, 'resultsPerPage': MAX_RESULTS, 'startIndex': start,
+                'cpeMatchString': pattern, 'resultsPerPage': 2000, 'startIndex': start,
             })
             payload = fetch_json(url)
             rows = payload.get('products', [])
@@ -2828,6 +2832,47 @@ def catalog_versions(part: str, vendor: str, product: str, force: bool = False) 
             return {'versions': json.loads(row['versions_json']), 'cached': True, 'stale': True,
                     'refreshedAt': row['refreshed_at'], 'source': 'NVD CPE Dictionary'}
         raise
+
+
+def catalog_versions_nonblocking(part: str, vendor: str, product: str, force: bool = False) -> tuple[int, dict]:
+    """Serve the cached dictionary immediately and refresh missing entries in a small worker pool."""
+    now = int(time.time())
+    with database_lock, connect() as connection:
+        row = connection.execute(
+            'SELECT * FROM cpe_version_cache WHERE part=? AND vendor=? AND product=?',
+            (part, vendor, product),
+        ).fetchone()
+    if row and row['refreshed_at'] and not force:
+        stale = row['next_refresh'] <= now
+        if not stale:
+            return 200, {'versions': json.loads(row['versions_json']), 'cached': True,
+                         'refreshedAt': row['refreshed_at'], 'source': 'NVD CPE Dictionary'}
+    else:
+        stale = bool(row)
+    key = (part, vendor, product)
+    with version_refresh_guard:
+        pending = key in version_refresh_pending
+        retry_after = row and row['next_refresh'] > now and row['last_error']
+        if not pending and not retry_after and len(version_refresh_pending) < 12:
+            version_refresh_pending.add(key)
+            pending = True
+
+            def refresh() -> None:
+                try:
+                    catalog_versions(part, vendor, product, force=True)
+                except Exception:
+                    pass  # Error details are persisted without exposing network internals.
+                finally:
+                    with version_refresh_guard:
+                        version_refresh_pending.discard(key)
+
+            version_refresh_pool.submit(refresh)
+    if row and row['refreshed_at']:
+        return 200, {'versions': json.loads(row['versions_json']), 'cached': True, 'stale': stale,
+                     'refreshing': pending, 'refreshedAt': row['refreshed_at'], 'source': 'NVD CPE Dictionary'}
+    if retry_after:
+        return 503, {'error': 'Dictionnaire NVD temporairement indisponible', 'retryAfter': row['next_refresh']}
+    return 202, {'versions': [], 'refreshing': pending, 'source': 'NVD CPE Dictionary'}
 
 
 def choose_metric(cve: dict) -> dict:
@@ -3507,10 +3552,10 @@ class Handler(BaseHTTPRequestHandler):
                 product = validate_text(parameters.get('cpeProduct', [''])[0], 100).lower()
                 if part not in ('a', 'o', 'h') or not vendor or not product:
                     raise ValueError('Identité CPE invalide')
-                payload = catalog_versions(part, vendor, product, parameters.get('force', ['0'])[0] == '1')
+                status, payload = catalog_versions_nonblocking(part, vendor, product, parameters.get('force', ['0'])[0] == '1')
                 payload.update({'part': part, 'vendor': vendor, 'product': product,
                                 'refreshSeconds': CPE_REFRESH_SECONDS})
-                self.send_json(200, payload)
+                self.send_json(status, payload)
             except ValueError as error:
                 self.send_json(400, {'error': str(error)})
             except Exception as error:

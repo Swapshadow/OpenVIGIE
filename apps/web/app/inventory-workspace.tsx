@@ -70,38 +70,41 @@ export default function InventoryWorkspace() {
 
   useEffect(() => {
     const controller = new AbortController();
-    let timeout = 0;
-    const initial = window.setTimeout(() => {
+    let timer = 0;
+    const load = async () => {
       setAvailableVersions([]);
       setVersionsStale(false);
       setVersionsLoading(false);
       if (!selectedProduct.cpeVendor || !selectedProduct.cpeProduct) return;
       setVersionsLoading(true);
-      timeout = window.setTimeout(() => {
-        controller.abort();
-        setVersionsLoading(false);
-        setVersionsStale(true);
-        setCustomVersion(true);
-      }, 12000);
       const params = new URLSearchParams({
         part: selectedProduct.part,
         cpeVendor: selectedProduct.cpeVendor,
         cpeProduct: selectedProduct.cpeProduct,
       });
-      void fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal })
-        .then(async (response) => {
-          const payload = await response.json() as { versions?: string[]; stale?: boolean; error?: string };
+      const poll = async () => {
+        timer = 0;
+        try {
+          const response = await fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal });
+          const payload = await response.json() as { versions?: string[]; stale?: boolean; refreshing?: boolean };
           if (controller.signal.aborted) return;
-          if (!response.ok) throw new Error(payload.error ?? 'Versions indisponibles');
+          if (response.status === 202 || payload.refreshing && !payload.versions?.length) {
+            timer = window.setTimeout(() => void poll(), 5000);
+            return;
+          }
+          if (!response.ok) throw new Error('Versions indisponibles');
           setAvailableVersions(payload.versions ?? []);
-          setVersionsStale(Boolean(payload.stale));
-        })
-        .catch(() => {
+          setVersionsStale(Boolean(payload.stale) || !payload.versions?.length);
+        } catch {
           if (!controller.signal.aborted) setVersionsStale(true);
-        })
-        .finally(() => { window.clearTimeout(timeout); if (!controller.signal.aborted) setVersionsLoading(false); });
-    }, 0);
-    return () => { window.clearTimeout(initial); window.clearTimeout(timeout); controller.abort(); };
+        } finally {
+          if (!controller.signal.aborted && !timer) setVersionsLoading(false);
+        }
+      };
+      void poll();
+    };
+    void load();
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [selectedProduct]);
 
   // Free-text search across the whole catalog: with 55 brands, walking two
@@ -427,8 +430,8 @@ export default function InventoryWorkspace() {
                   <option value={CUSTOM_VERSION}>Autre version…</option>
                 </select>
               )}
-              {versionsLoading && !customVersion ? <small>Le catalogue NVD peut être volumineux. Vous pouvez saisir votre version dès maintenant.</small> : null}
-              {versionsStale ? <small>Liste NVD trop lente ou indisponible — saisissez la version exacte installée. La vérification CVE reste fondée sur NVD.</small> : null}
+              {versionsLoading && !customVersion ? <small>Chargement du dictionnaire NVD en arrière-plan. Vous pouvez saisir votre version dès maintenant.</small> : null}
+              {versionsStale ? <small>Le dictionnaire NVD ne fournit pas de liste pour ce produit. Saisissez la version exacte installée.</small> : null}
               {!customVersion ? <button type="button" className="version-back" onClick={() => { setCustomVersion(true); setVersion(''); }}>Saisir ma version exacte →</button> : null}
               {customVersion ? (
                 <button type="button" className="version-back" onClick={() => { setCustomVersion(false); setVersion(''); }}>
