@@ -26,6 +26,7 @@ type WeeklyReport = {
   categories: Array<{ name: string; count: number }>;
   sources: string[];
   ranking: { method: string; warning: string };
+  scope: { strict: boolean; notice: string; assetCount: number; assets: Array<{ id: string; label: string; product: string; version: string; cveCount: number }> };
 };
 
 function formatDate(value: string | null, withTime = false) {
@@ -114,6 +115,7 @@ function buildReportHtml(data: WeeklyReport): string {
 </style></head><body>
 <h1>OpenVigie — Rapport hebdomadaire</h1>
 <div class="head-meta">Période : ${esc(range)} · Généré le ${esc(generated)}</div>
+<p><strong>Périmètre strict :</strong> ${esc(data.scope.notice)} ${data.scope.assetCount} équipement${data.scope.assetCount > 1 ? 's' : ''} analysé${data.scope.assetCount > 1 ? 's' : ''}.</p>
 <div class="kpis">
   ${kpi('Articles', data.stats.articles)}
   ${kpi('Sources actives', data.stats.sources)}
@@ -221,6 +223,7 @@ export default function WeeklyReport() {
               ? `${formatDate(data.period.start)} → ${formatDate(data.period.end)} · généré le ${formatDate(data.generatedAt, true)}`
               : 'Compilation de la semaine…'}
           </p>
+          {data?.scope ? <p className="weekly-scope"><strong>Périmètre strict</strong> · {data.scope.assetCount} équipement{data.scope.assetCount > 1 ? 's' : ''} de l’organisation active uniquement</p> : null}
         </div>
         <div className="weekly-actions">
           <button type="button" onClick={exportHtml} disabled={!data}>Exporter HTML</button>

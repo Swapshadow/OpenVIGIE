@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 
 async function proxy(request: Request) {
-  const base = process.env.OPENVIGIE_COLLECTOR_URL?.replace(/\/$/, '');
-  if (!base) return NextResponse.json({ error: 'Le collecteur est requis pour vérifier les versions affectées.' }, { status: 503 });
+  const base = (process.env.OPENVIGIE_COLLECTOR_URL ?? 'http://collector:8787').replace(/\/$/, '');
   try {
     const response = await fetch(`${base}/vulnerabilities?${new URL(request.url).searchParams}`, {
       method: request.method, cache: 'no-store', signal: AbortSignal.timeout(120000),

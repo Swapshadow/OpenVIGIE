@@ -1,11 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { vendorCatalog } from './asset-catalog';
 import type { InventoryAsset } from './vulnerability-types';
 import type { Cadence } from './bulletin-data';
-
-const INVENTORY_STORAGE_KEY = 'openvigie.inventory.v1';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -74,33 +71,22 @@ const WELCOME =
   'attribué et je vérifie votre parc contre les CVE et le catalogue CISA KEV par des ' +
   'règles factuelles — je n’invente rien et je cite mes sources.';
 
-function resolveInventory(): ResolvedAsset[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = window.localStorage.getItem(INVENTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as InventoryAsset[];
-    if (!Array.isArray(parsed)) return [];
+function resolveInventory(parsed: InventoryAsset[]): ResolvedAsset[] {
     return parsed.slice(0, 60).map((asset) => {
-      const vendor = vendorCatalog.find((entry) => entry.id === asset.vendorId);
-      const product = vendor?.products.find((entry) => entry.id === asset.productId);
       return {
         label: (asset.label ?? '').slice(0, 80),
-        vendor: vendor?.name ?? asset.vendorId ?? '',
-        product: product?.name ?? asset.productId ?? '',
+        vendor: asset.vendorName ?? asset.vendorId ?? '',
+        product: asset.productName ?? asset.productId ?? '',
         version: (asset.version ?? '').slice(0, 80),
         exposure: (asset.exposure ?? '').slice(0, 80),
         // Lets the backend rebuild the exact cache_key "Mon parc" uses, so Vigi
         // reads the same verified NVD/CISA KEV snapshot — never a contradicting
         // guess of its own.
-        part: product?.part ?? 'a',
-        cpeVendor: product?.cpeVendor ?? '',
-        cpeProduct: product?.cpeProduct ?? '',
+        part: asset.part ?? 'a',
+        cpeVendor: asset.cpeVendor ?? '',
+        cpeProduct: asset.cpeProduct ?? '',
       };
     });
-  } catch {
-    return [];
-  }
 }
 
 /** Parses one or more complete NDJSON lines out of a growing text buffer,
@@ -127,6 +113,7 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
   const [phase, setPhase] = useState<'idle' | 'checking' | 'streaming'>('idle');
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: WELCOME, intro: true }]);
+  const [inventory, setInventory] = useState<InventoryAsset[]>([]);
   const threadRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -138,14 +125,24 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  const assetCount = useMemo(() => (open ? resolveInventory().length : 0), [open]);
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    void fetch('/api/assets', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => response.ok ? (await response.json() as { assets: InventoryAsset[] }).assets : [])
+      .then(setInventory)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [open]);
+
+  const assetCount = useMemo(() => resolveInventory(inventory).length, [inventory]);
 
   const send = useCallback(
     async (text: string) => {
       const question = text.trim();
       if (!question || pending) return;
 
-      const assets = resolveInventory();
+      const assets = resolveInventory(inventory);
       const history = [...messages, { role: 'user' as ChatRole, content: question }];
       setMessages([...history, { role: 'assistant', content: '', streaming: true }]);
       setDraft('');
@@ -235,7 +232,7 @@ export default function VigiChat({ cadence = 'daily' as Cadence }: { cadence?: C
         abortRef.current = null;
       }
     },
-    [cadence, messages, pending],
+    [cadence, inventory, messages, pending],
   );
 
   return (

@@ -31,4 +31,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
   CMD curl -fsS http://localhost:3000/ || exit 1
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
-CMD ["pnpm", "start", "--", "--host", "0.0.0.0"]
+CMD ["pnpm", "start"]

@@ -20,6 +20,11 @@ class AlertTests(unittest.TestCase):
         self.db = patch.object(collector, 'DB_PATH', self.temp.name + '/test.db')
         self.db.start()
         collector.initialize_database()
+        with collector.connect() as connection:
+            connection.execute("INSERT INTO organizations VALUES('test-org','Test Org','test-org',0)")
+            connection.execute("INSERT INTO users VALUES('test-user','test-org','test@example.com','Test',?,'owner',0)",
+                               (collector.password_digest('a sufficiently long password'),))
+            self.token = collector.create_session(connection, 'test-user')
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), collector.Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -34,7 +39,7 @@ class AlertTests(unittest.TestCase):
         self.temp.cleanup()
 
     def request(self, path, method='GET', data=None):
-        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_port}{path}', data=None if data is None else json.dumps(data).encode(), method=method, headers={'Content-Type': 'application/json'})
+        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_port}{path}', data=None if data is None else json.dumps(data).encode(), method=method, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {self.token}'})
         try:
             response = urllib.request.urlopen(request)
         except urllib.error.HTTPError as error:

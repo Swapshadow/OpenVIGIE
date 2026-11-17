@@ -1,5 +1,7 @@
 # OpenVigie
 
+> La refonte OpenVigie 2027 ajoute les organisations isolées, l’inventaire persistant, une cartographie 3D typée et des rapports strictement limités au parc actif. La conception NVD, les garanties de corrélation et la procédure de mise à niveau Docker sont détaillées dans [docs/OPENVIGIE-2027.md](docs/OPENVIGIE-2027.md).
+
 OpenVigie is an open-source, asset-centric cybersecurity and vulnerability
 intelligence platform.
 

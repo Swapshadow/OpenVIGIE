@@ -8,6 +8,7 @@ import html
 import json
 import os
 import re
+import secrets
 from difflib import SequenceMatcher
 import sqlite3
 import threading
@@ -415,6 +416,13 @@ kev_lock = threading.Lock()
 kev_cache: tuple[float, dict[str, dict]] | None = None
 nvd_rate_lock = threading.Lock()
 last_nvd_request = 0.0
+SESSION_SECONDS = 30 * 86400
+PASSWORD_MIN_LENGTH = 12
+ASSET_KINDS = frozenset({'server', 'workstation', 'switch', 'router', 'firewall', 'phone', 'cloud', 'service'})
+EMAIL_API_PATHS = frozenset({
+    '/settings/email-config', '/settings/email-config/test', '/settings/email-recipients',
+    '/notifications', '/notifications/read', '/notifications/mark-all-read',
+})
 
 
 class DatabaseConnection(sqlite3.Connection):
@@ -574,6 +582,38 @@ def initialize_database() -> None:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS collector_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS organizations (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE,
+              created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS users (
+              id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+              email TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL,
+              password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'owner',
+              created_at INTEGER NOT NULL,
+              FOREIGN KEY(organization_id) REFERENCES organizations(id)
+            );
+            CREATE TABLE IF NOT EXISTS sessions (
+              token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+              created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
+            CREATE TABLE IF NOT EXISTS organization_assets (
+              id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+              vendor_id TEXT NOT NULL, product_id TEXT NOT NULL,
+              vendor_name TEXT NOT NULL, product_name TEXT NOT NULL,
+              label TEXT NOT NULL, version TEXT NOT NULL, exposure TEXT NOT NULL,
+              kind TEXT NOT NULL, part TEXT NOT NULL,
+              cpe_vendor TEXT NOT NULL DEFAULT '', cpe_product TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+              FOREIGN KEY(organization_id) REFERENCES organizations(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_org_assets_org ON organization_assets(organization_id, created_at);
+            """
+        )
         policy = connection.execute(
             "SELECT value FROM collector_metadata WHERE key = 'cve_matching_policy'"
         ).fetchone()
@@ -593,6 +633,78 @@ def initialize_database() -> None:
                 "INSERT OR REPLACE INTO collector_metadata(key,value) VALUES('cve_matching_policy',?)",
                 (str(MATCHING_POLICY),),
             )
+
+
+def password_digest(password: str, salt: bytes | None = None) -> str:
+    if not isinstance(password, str) or len(password) < PASSWORD_MIN_LENGTH or len(password) > 256:
+        raise ValueError(f"Le mot de passe doit contenir au moins {PASSWORD_MIN_LENGTH} caractères")
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
+
+
+def password_matches(password: str, encoded: str) -> bool:
+    try:
+        algorithm, n, r, p, salt_hex, expected = encoded.split('$')
+        if algorithm != 'scrypt':
+            return False
+        actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt_hex),
+                                n=int(n), r=int(r), p=int(p), dklen=32).hex()
+        return secrets.compare_digest(actual, expected)
+    except (ValueError, TypeError):
+        return False
+
+
+def public_account(row: sqlite3.Row | dict) -> dict:
+    return {
+        'id': row['user_id'] if 'user_id' in row.keys() else row['id'],
+        'email': row['email'], 'displayName': row['display_name'], 'role': row['role'],
+        'organization': {'id': row['organization_id'], 'name': row['organization_name'],
+                         'slug': row['organization_slug']},
+    }
+
+
+def create_session(connection: sqlite3.Connection, user_id: str) -> str:
+    token = secrets.token_urlsafe(48)
+    now = int(time.time())
+    connection.execute('DELETE FROM sessions WHERE expires_at <= ?', (now,))
+    connection.execute('INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)',
+                       (hashlib.sha256(token.encode()).hexdigest(), user_id, now, now + SESSION_SECONDS))
+    return token
+
+
+def account_for_token(token: str) -> sqlite3.Row | None:
+    if not token or len(token) > 256:
+        return None
+    with database_lock, connect() as connection:
+        return connection.execute(
+            """SELECT s.token_hash,u.id AS user_id,u.organization_id,u.email,u.display_name,u.role,
+                      o.name AS organization_name,o.slug AS organization_slug
+               FROM sessions s JOIN users u ON u.id=s.user_id
+               JOIN organizations o ON o.id=u.organization_id
+               WHERE s.token_hash=? AND s.expires_at>?""",
+            (hashlib.sha256(token.encode()).hexdigest(), int(time.time())),
+        ).fetchone()
+
+
+def serialize_asset(row: sqlite3.Row) -> dict:
+    return {
+        'id': row['id'], 'vendorId': row['vendor_id'], 'productId': row['product_id'],
+        'vendorName': row['vendor_name'], 'productName': row['product_name'],
+        'label': row['label'], 'version': row['version'], 'exposure': row['exposure'],
+        'kind': row['kind'], 'part': row['part'], 'cpeVendor': row['cpe_vendor'],
+        'cpeProduct': row['cpe_product'],
+        'createdAt': iso_timestamp(row['created_at']), 'updatedAt': iso_timestamp(row['updated_at']),
+    }
+
+
+def organization_assets(organization_id: str) -> list[dict]:
+    with database_lock, connect() as connection:
+        rows = connection.execute(
+            'SELECT * FROM organization_assets WHERE organization_id=? ORDER BY created_at,id',
+            (organization_id,),
+        ).fetchall()
+    return [serialize_asset(row) for row in rows]
 
 
 def validate_text(value: str, maximum: int) -> str:
@@ -1626,6 +1738,77 @@ def build_weekly_report(limit: int = 40) -> dict:
         "categories": categories,
         "sources": active_sources,
         "ranking": news["ranking"],
+    }
+
+
+def build_organization_weekly_report(organization_id: str, limit: int = 40) -> dict:
+    """Seven-day report containing only CVEs and articles linked to this org's assets."""
+    assets = organization_assets(organization_id)
+    asset_cves: dict[str, list[str]] = {}
+    snapshots = []
+    for asset in assets:
+        query = {
+            'vendor': asset['vendorName'], 'product': asset['productName'],
+            'version': asset['version'], 'part': asset['part'],
+            'cpeVendor': asset['cpeVendor'], 'cpeProduct': asset['cpeProduct'],
+        }
+        row = read_cached(cache_key(query))
+        try:
+            payload = json.loads(row['payload_json']) if row and row['payload_json'] else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if payload.get('matchingPolicy') != MATCHING_POLICY:
+            payload = {}
+        ids = [item['id'] for item in payload.get('vulnerabilities', []) if item.get('confidence') == 'confirmed']
+        for cve_id in ids:
+            asset_cves.setdefault(cve_id, []).append(asset['id'])
+        snapshots.append({
+            'id': asset['id'], 'label': asset['label'], 'vendor': asset['vendorName'],
+            'product': asset['productName'], 'version': asset['version'],
+            'cveCount': len(ids), 'stale': not bool(payload) or bool(payload.get('stale')),
+        })
+
+    base = build_weekly_report(limit)
+    allowed = set(asset_cves)
+    top_cve = []
+    for entry in base['topCve']:
+        if entry['cve'] in allowed:
+            top_cve.append({**entry, 'assetIds': asset_cves[entry['cve']]})
+    reported = {item['cve'] for item in top_cve}
+    for cve_id in sorted(allowed - reported):
+        top_cve.append({
+            'cve': cve_id, 'mentions': 0, 'kev': False, 'kevRansomware': False,
+            'kevDateAdded': None, 'vendor': None, 'product': None, 'articles': [],
+            'assetIds': asset_cves[cve_id],
+        })
+    top_news = [item for item in base['topNews'] if allowed.intersection(item.get('cves', []))]
+    relevant_categories: dict[str, int] = {}
+    relevant_sources = set()
+    for item in top_news:
+        category = item.get('category') or 'Vulnérabilités & correctifs'
+        relevant_categories[category] = relevant_categories.get(category, 0) + 1
+        source = (item.get('source') or {}).get('name')
+        if source:
+            relevant_sources.add(source)
+    return {
+        **base,
+        'scope': {
+            'organizationId': organization_id, 'assetCount': len(assets),
+            'strict': True, 'notice': "Uniquement les équipements de l’organisation active.",
+            'assets': snapshots,
+        },
+        'stats': {
+            'articles': len(top_news), 'sources': len(relevant_sources),
+            'cves': len(top_cve), 'kev': sum(1 for item in top_cve if item['kev']),
+            'categories': len(relevant_categories),
+        },
+        'topCve': top_cve, 'topNews': top_news[:10], 'trending': [],
+        'categories': sorted(
+            ({'name': name, 'count': count} for name, count in relevant_categories.items()),
+            key=lambda item: (-item['count'], item['name']),
+        ),
+        'sources': sorted(relevant_sources),
+        'ranking': {**base['ranking'], 'scope': 'organization-assets-only'},
     }
 
 
@@ -2680,6 +2863,8 @@ def normalize_cve(cve: dict, kev: dict[str, dict]) -> dict:
         }
     return {
         "id": cve.get("id", "CVE inconnue"),
+        "vulnStatus": cve.get("vulnStatus", "Unknown"),
+        "sourceIdentifier": cve.get("sourceIdentifier", ""),
         "description": description or "Description non disponible.",
         "score": metric.get("baseScore"),
         "severity": metric.get("baseSeverity", "UNKNOWN"),
@@ -2973,11 +3158,22 @@ def nvd_affected_confidence(cve: dict, query: dict) -> str:
 
 def collect(query: dict[str, str]) -> dict:
     use_cpe = bool(query["cpeVendor"] and query["cpeProduct"] and query["version"])
-    if not use_cpe:
+    coarse_windows = (
+        query.get('cpeVendor', '').lower(), query.get('cpeProduct', '').lower(),
+        query.get('version', '').strip().lower(),
+    ) in {
+        ('microsoft', 'windows_server_2022', '2022'),
+        ('microsoft', 'windows_server_2022', '21h2'),
+        ('microsoft', 'windows_server_2022', '2022 21h2'),
+        ('microsoft', 'windows_server_2022', '2022, 21h2'),
+    }
+    if not use_cpe or coarse_windows:
         return {
             "asset": {"vendor": query["vendor"], "product": query["product"], "version": query["version"]},
             "matching": {"method": "none", "confidence": "unavailable", "query": "",
-                         "message": "Pas de correspondance CPE fiable — recherche manuelle recommandée"},
+                         "message": ("Windows Server 2022 seul est trop large : indiquez le numéro de build exact "
+                                     "(winver, par ex. 10.0.20348.x) pour éviter des milliers de faux résultats."
+                                     if coarse_windows else "Pas de correspondance CPE fiable — recherche manuelle recommandée")},
             "vulnerabilities": [], "totalResults": 0, "nvdTotalResults": 0,
             "matchingPolicy": MATCHING_POLICY,
             "fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -3245,10 +3441,38 @@ class Handler(BaseHTTPRequestHandler):
         query = normalize_query(urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
         return query, cache_key(query)
 
+    def bearer_token(self) -> str:
+        value = self.headers.get('Authorization', '')
+        return value[7:].strip() if value.startswith('Bearer ') else ''
+
+    def require_account(self) -> sqlite3.Row | None:
+        account = account_for_token(self.bearer_token())
+        if not account:
+            self.send_json(401, {'error': 'Authentification requise'})
+        return account
+
+    def json_body(self, maximum: int = 32_768) -> dict:
+        length = int(self.headers.get('Content-Length', '0'))
+        if length <= 0 or length > maximum:
+            raise ValueError('Corps de requête invalide')
+        payload = json.loads(self.rfile.read(length))
+        if not isinstance(payload, dict):
+            raise ValueError('Corps de requête invalide')
+        return payload
+
+    def handle_email_api(self, path: str) -> bool:
+        if path not in EMAIL_API_PATHS:
+            return False
+        account = self.require_account()
+        if not account:
+            return True
+        self.organization_id = account['organization_id']
+        return email_notifier.handle(self, connect)
+
     def do_GET(self) -> None:  # noqa: N802
-        if email_notifier.handle(self, connect):
-            return
         parsed = urllib.parse.urlparse(self.path)
+        if self.handle_email_api(parsed.path):
+            return
         if parsed.path == "/health":
             with database_lock, connect() as connection:
                 article_count = connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
@@ -3261,6 +3485,16 @@ class Handler(BaseHTTPRequestHandler):
                 "activeFeeds": active_feeds,
                 "configuredFeeds": len(FEED_SOURCES),
             })
+            return
+        if parsed.path == '/account/me':
+            account = self.require_account()
+            if account:
+                self.send_json(200, {'account': public_account(account)})
+            return
+        if parsed.path == '/assets':
+            account = self.require_account()
+            if account:
+                self.send_json(200, {'assets': organization_assets(account['organization_id'])})
             return
         if parsed.path == "/feeds/status":
             self.send_json(200, {"sources": feed_statuses(), "refreshSeconds": FEED_REFRESH_SECONDS})
@@ -3325,7 +3559,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/bulletin/weekly":
             try:
-                self.send_json(200, build_weekly_report())
+                account = self.require_account()
+                if account:
+                    self.send_json(200, build_organization_weekly_report(account['organization_id']))
             except Exception as error:
                 print(f"weekly report error: {error}", flush=True)
                 self.send_json(500, {"error": "Erreur interne du rapport hebdomadaire"})
@@ -3405,9 +3641,92 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"error": "Erreur interne du collecteur"})
 
     def do_POST(self) -> None:  # noqa: N802
-        if email_notifier.handle(self, connect):
-            return
         path = urllib.parse.urlparse(self.path).path
+        if self.handle_email_api(path):
+            return
+        if path == '/auth/register':
+            try:
+                payload = self.json_body()
+                email = str(payload.get('email', '')).strip().lower()
+                display_name = validate_text(str(payload.get('displayName', '')), 100)
+                organization_name = validate_text(str(payload.get('organizationName', '')), 120)
+                password = str(payload.get('password', ''))
+                if not re.fullmatch(r'[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+', email):
+                    raise ValueError('Adresse email invalide')
+                if not display_name or not organization_name:
+                    raise ValueError('Nom et organisation requis')
+                organization_id, user_id = secrets.token_hex(16), secrets.token_hex(16)
+                slug_base = re.sub(r'[^a-z0-9]+', '-', normalized_search_text(organization_name)).strip('-')[:48] or 'organisation'
+                now = int(time.time())
+                with database_lock, connect() as connection:
+                    if connection.execute('SELECT 1 FROM users WHERE email=?', (email,)).fetchone():
+                        raise ValueError('Un compte existe déjà pour cette adresse')
+                    slug = slug_base
+                    if connection.execute('SELECT 1 FROM organizations WHERE slug=?', (slug,)).fetchone():
+                        slug = f'{slug_base}-{secrets.token_hex(3)}'
+                    connection.execute('INSERT INTO organizations(id,name,slug,created_at) VALUES(?,?,?,?)',
+                                       (organization_id, organization_name, slug, now))
+                    connection.execute(
+                        'INSERT INTO users(id,organization_id,email,display_name,password_hash,role,created_at) VALUES(?,?,?,?,?,?,?)',
+                        (user_id, organization_id, email, display_name, password_digest(password), 'owner', now),
+                    )
+                    token = create_session(connection, user_id)
+                account = account_for_token(token)
+                self.send_json(201, {'token': token, 'account': public_account(account)})
+            except (ValueError, json.JSONDecodeError) as error:
+                self.send_json(400, {'error': str(error)})
+            return
+        if path == '/auth/login':
+            try:
+                payload = self.json_body()
+                email = str(payload.get('email', '')).strip().lower()
+                password = str(payload.get('password', ''))
+                with database_lock, connect() as connection:
+                    user = connection.execute('SELECT * FROM users WHERE email=?', (email,)).fetchone()
+                    if not user or not password_matches(password, user['password_hash']):
+                        raise ValueError('Identifiants invalides')
+                    token = create_session(connection, user['id'])
+                account = account_for_token(token)
+                self.send_json(200, {'token': token, 'account': public_account(account)})
+            except (ValueError, json.JSONDecodeError):
+                self.send_json(401, {'error': 'Identifiants invalides'})
+            return
+        if path == '/auth/logout':
+            token = self.bearer_token()
+            if token:
+                with database_lock, connect() as connection:
+                    connection.execute('DELETE FROM sessions WHERE token_hash=?',
+                                       (hashlib.sha256(token.encode()).hexdigest(),))
+            self.send_json(200, {'success': True})
+            return
+        if path == '/assets':
+            account = self.require_account()
+            if not account:
+                return
+            try:
+                payload = self.json_body()
+                required = ('vendorId', 'productId', 'vendorName', 'productName', 'label', 'version', 'exposure', 'kind', 'part')
+                values = {key: validate_text(str(payload.get(key, '')), 120) for key in required}
+                if not all(values[key] for key in required if key != 'version') or values['part'] not in ('a', 'o', 'h') or values['kind'] not in ASSET_KINDS:
+                    raise ValueError('Équipement invalide')
+                cpe_vendor = validate_text(str(payload.get('cpeVendor', '')), 100).lower()
+                cpe_product = validate_text(str(payload.get('cpeProduct', '')), 100).lower()
+                asset_id, now = secrets.token_hex(16), int(time.time())
+                with database_lock, connect() as connection:
+                    connection.execute(
+                        """INSERT INTO organization_assets(
+                           id,organization_id,vendor_id,product_id,vendor_name,product_name,label,version,
+                           exposure,kind,part,cpe_vendor,cpe_product,created_at,updated_at)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (asset_id, account['organization_id'], values['vendorId'], values['productId'],
+                         values['vendorName'], values['productName'], values['label'], values['version'],
+                         values['exposure'], values['kind'], values['part'], cpe_vendor, cpe_product, now, now),
+                    )
+                    row = connection.execute('SELECT * FROM organization_assets WHERE id=?', (asset_id,)).fetchone()
+                self.send_json(201, {'asset': serialize_asset(row)})
+            except (ValueError, json.JSONDecodeError) as error:
+                self.send_json(400, {'error': str(error)})
+            return
         if path == "/ai/chat":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -3500,9 +3819,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "Route inconnue"})
 
     def do_DELETE(self) -> None:  # noqa: N802
-        if email_notifier.handle(self, connect):
-            return
         parsed = urllib.parse.urlparse(self.path)
+        if self.handle_email_api(parsed.path):
+            return
+        if parsed.path == '/assets':
+            account = self.require_account()
+            if not account:
+                return
+            asset_id = urllib.parse.parse_qs(parsed.query).get('id', [''])[0]
+            with database_lock, connect() as connection:
+                deleted = connection.execute(
+                    'DELETE FROM organization_assets WHERE id=? AND organization_id=?',
+                    (asset_id, account['organization_id']),
+                ).rowcount
+            self.send_json(200 if deleted else 404, {'success': bool(deleted)})
+            return
         if parsed.path == "/watch-plan/alert":
             try:
                 alert_id = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
@@ -3524,7 +3855,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(error)})
 
     def do_PUT(self) -> None:
-        if not email_notifier.handle(self, connect):
+        path = urllib.parse.urlparse(self.path).path
+        if not self.handle_email_api(path):
             self.send_json(404, {"error": "Route inconnue"})
 
     def log_message(self, message: str, *args: object) -> None:
