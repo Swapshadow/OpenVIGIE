@@ -5,12 +5,13 @@ import type { Cadence } from './bulletin-data';
 import InventoryWorkspace from './inventory-workspace';
 import LeakToday from './leak-today';
 import VigiChat from './vigi-chat';
-import BrandRadar from './brand-radar';
 import SettingsMenu from './settings-menu';
 import EmailAlertsConfig from './email-alerts-config';
 import NotificationCenter from './notification-center';
 import { WorkspaceNavigation, type Desk } from './workspace-navigation';
 import { AccountAccess, type Account } from './account-access';
+import CyberBackground from './cyber-background';
+import LighthouseMark from './lighthouse-mark';
 
 type View = 'bulletin' | 'assets';
 type BulletinTab = 'news' | 'leaks';
@@ -94,12 +95,12 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
 
   return (
     <main className="app-shell">
-      <div className="ambient-symbols app-ambient" aria-hidden="true"><i>🚀</i><i>◉</i><i>₿</i></div>
+      <CyberBackground subtle />
       <a className="skip-link" href="#workspace-content">Aller au contenu</a>
 
       <header className="topbar glass-panel">
         <button className="brand" type="button" aria-label="OpenVigie, retour au bulletin" onClick={() => { openDesk('fil'); setNotificationsOpen(false); }}>
-          <span className="brand-mark"><BrandRadar /></span>
+          <span className="brand-mark"><LighthouseMark /></span>
           <span><b>open</b>vigie<span className="brand-caption">CYBER INTELLIGENCE</span></span>
         </button>
         <div className="sync-state"><AppIcon name="radar" /><span>{account.organization.name}<small>Espace isolé · {account.displayName}</small></span></div>
@@ -122,7 +123,7 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
 
       <div className="workspace">
         <aside className="sidebar glass-panel" aria-label="Navigation principale">
-          <div className="workspace-label"><span>OV</span><div>Espace de travail<small>Veille & infrastructure</small></div></div>
+          <div className="workspace-label"><span><LighthouseMark /></span><div>Espace de travail<small>Veille & infrastructure</small></div></div>
           <p className="eyebrow">Explorer</p>
           <nav className="nav-list">
             {([

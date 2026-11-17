@@ -1,6 +1,8 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
+import CyberBackground from './cyber-background';
+import LighthouseMark from './lighthouse-mark';
 
 export type Account = {
   id: string;
@@ -37,7 +39,7 @@ export function AccountAccess({ onAuthenticated }: { onAuthenticated: (account: 
 
   return (
     <main className="access-shell">
-      <div className="ambient-symbols" aria-hidden="true"><i>🚀</i><i>◉</i><i>₿</i></div>
+      <CyberBackground />
       <section className="access-story">
         <p className="eyebrow neon">OpenVigie 2027</p>
         <h1>La vigie cyber<br />centrée sur votre SI.</h1>
@@ -49,7 +51,7 @@ export function AccountAccess({ onAuthenticated }: { onAuthenticated: (account: 
         </ul>
       </section>
       <section className="access-card glass-panel" aria-labelledby="access-title">
-        <div className="access-brand"><span>OV</span><div><b>openvigie</b><small>CYBER INTELLIGENCE</small></div></div>
+        <div className="access-brand"><span><LighthouseMark /></span><div><b>openvigie</b><small>CYBER INTELLIGENCE</small></div></div>
         <h2 id="access-title">{mode === 'register' ? 'Créer votre espace sécurisé' : 'Retrouver votre espace'}</h2>
         <p>{mode === 'register' ? 'Le premier compte devient propriétaire de son organisation.' : 'Connectez-vous à votre organisation.'}</p>
         <form onSubmit={submit}>

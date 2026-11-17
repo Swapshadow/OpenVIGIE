@@ -1659,6 +1659,26 @@ select option, select optgroup { background-color: #151c2a; color: #f4f6fc; }
 button.brand { border: 0; padding: 0; background: transparent; cursor: pointer; }
 
 .brand-mark .brand-radar { width: 32px; height: 32px; color: #58f3ff; }
+.lighthouse-mark { width: 31px; height: 31px; color: #65f3bd; filter: drop-shadow(0 0 7px rgba(100,255,194,.35)); }
+.access-brand .lighthouse-mark { width: 36px; height: 36px; color: #082320; filter: none; }
+.workspace-label .lighthouse-mark { width: 25px; height: 25px; }
+.cyber-background { position: fixed; inset: 0; overflow: hidden; z-index: 0; pointer-events: none; opacity: .68; }
+.cyber-background canvas { width: 100%; height: 100%; display: block; }
+.cyber-background-subtle { opacity: .2; }
+.cyber-object { position: absolute; display: block; opacity: .45; filter: drop-shadow(0 0 14px rgba(81,255,201,.25)); user-select: none; }
+.planet { width: 78px; height: 78px; border-radius: 50%; background: radial-gradient(circle at 35% 28%,#a4f9dc,#327f8d 34%,#172943 72%); box-shadow: inset -14px -12px 22px #07101e,0 0 35px #60efcb55; }
+.planet:after { content: ''; position: absolute; inset: 29px -26px; border: 2px solid #89e8d89c; border-radius: 50%; transform: rotate(-25deg); }
+.planet-one { left: 6%; top: 14%; transform: scale(.7); }.planet-two { right: 6%; bottom: 14%; transform: scale(1.1); }
+.rocket { font-size: 33px; animation: cyber-flight 24s ease-in-out infinite alternate; }.rocket-one { left: 29%; top: 10%; }.rocket-two { right: 22%; bottom: 8%; animation-delay: -13s; }
+.saucer { left: 7%; bottom: 23%; font-size: 42px; animation: cyber-hover 11s ease-in-out infinite alternate; }
+.ethereum { right: 27%; top: 7%; font-size: 44px; font-weight: 200; color: #b5b8ff; animation: cyber-hover 13s ease-in-out infinite alternate; }
+.microsoft-mark { right: 9%; top: 35%; display: grid; grid-template-columns: repeat(2, 13px); gap: 3px; transform: rotate(-9deg); }.microsoft-mark i { display: block; width: 13px; height: 13px; background: #69d8bd; }.microsoft-mark i:nth-child(2) { background: #6ba3e9; }.microsoft-mark i:nth-child(3) { background: #f2a969; }.microsoft-mark i:nth-child(4) { background: #e1d57b; }
+.linux-mark { left: 40%; bottom: 12%; font-size: 38px; }.apple-mark { right: 37%; bottom: 26%; font-size: 42px; color: #d7e5ed; }.apple-mark i { position: absolute; top: -14px; left: 20px; font-size: 18px; transform: rotate(-40deg); }
+.vendor-mark { color: #8bbebd; font-size: 11px; font-weight: 800; letter-spacing: .14em; }.fortinet-mark { left: 3%; bottom: 6%; }.sentinel-mark { right: 3%; top: 10%; }
+@keyframes cyber-flight { from { transform: translate3d(-50px,30px,0) rotate(-25deg); } to { transform: translate3d(90px,-60px,0) rotate(8deg); } }
+@keyframes cyber-hover { to { transform: translate3d(35px,-25px,0) rotate(8deg); } }
+@media (max-width: 850px) { .cyber-object { opacity: .25; }.vendor-mark,.apple-mark,.linux-mark { display: none; }.planet-one { left: 3%; top: 5%; transform: scale(.45); }.planet-two { right: 3%; bottom: 4%; transform: scale(.55); } }
+@media (prefers-reduced-motion: reduce) { .cyber-object { animation: none!important; } }
 .radar-wave { transform-origin: 16px 16px; animation: radar-wave 2.8s ease-out infinite; }
 .radar-wave-delayed { animation-delay: -1.4s; }
 .radar-contact { animation: radar-contact 1.4s ease-in-out infinite; }
