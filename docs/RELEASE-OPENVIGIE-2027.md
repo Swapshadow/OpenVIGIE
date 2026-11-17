@@ -2,6 +2,8 @@
 
 Version `v2027.0.0` — première release de la refonte 2027.
 
+[Guide d'installation Docker 2027](https://github.com/Swapshadow/OpenVIGIE/blob/main/docs/INSTALLATION-DOCKER-2027.md).
+
 ## Points forts
 
 - Corrélation CVE fondée sur les données NVD du NIST, les CPE 2.3 et les plages
