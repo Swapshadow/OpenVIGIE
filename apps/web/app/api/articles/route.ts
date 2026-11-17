@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 const ALLOWED_CADENCES = new Set(['daily', 'weekly', 'monthly']);
 
 export async function GET(request: Request) {
-  const collectorBase = process.env.OPENVIGIE_COLLECTOR_URL?.replace(/\/$/, '');
+  const collectorBase = (process.env.OPENVIGIE_COLLECTOR_URL ?? 'http://collector:8787').replace(/\/$/, '');
   if (!collectorBase) {
     return NextResponse.json(
       { error: 'Le collecteur d’articles est disponible avec le lancement Docker d’OpenVigie.' },
