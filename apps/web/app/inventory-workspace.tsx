@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findProduct, findVendor, vendorCatalog } from './asset-catalog';
+import { findProduct, findVendor, vendorCatalog, type ProductDefinition } from './asset-catalog';
 import { downloadParcReport, type ParcReportAsset } from './parc-report';
 import type { InventoryAsset, Vulnerability, VulnerabilityResponse } from './vulnerability-types';
 import InfrastructureMap from './infrastructure-map';
@@ -11,6 +11,18 @@ type SeverityFilter = 'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'KEV';
 
 const AUTO_REFRESH_MS = 24 * 60 * 60 * 1000;
 const CUSTOM_VERSION = '__custom__';
+
+function suggestedKind(product: ProductDefinition): InventoryAsset['kind'] {
+  const category = `${product.name} ${product.family}`.toLowerCase();
+  if (/pare-feu|firewall|fortigate|pfsense/.test(category)) return 'firewall';
+  if (/commut|switch|catalyst|nexus/.test(category)) return 'switch';
+  if (/routeur|routage|router/.test(category)) return 'router';
+  if (/téléphone|phone|ios mobile|android/.test(category)) return 'phone';
+  if (/poste|desktop|workstation|windows 1[01]|macos/.test(category)) return 'workstation';
+  if (/cloud|saas/.test(category)) return 'cloud';
+  if (/service|openssh|vpn|docker/.test(category)) return 'service';
+  return 'server';
+}
 
 function formatDate(value: string) {
   if (!value) return '—';
@@ -38,7 +50,7 @@ export default function InventoryWorkspace() {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [label, setLabel] = useState('');
   const [exposure, setExposure] = useState('Réseau interne');
-  const [kind, setKind] = useState<InventoryAsset['kind']>('server');
+  const [kind, setKind] = useState<InventoryAsset['kind']>(() => suggestedKind(vendorCatalog[0].products[0]));
   const [formOpen, setFormOpen] = useState(true);
   const [formError, setFormError] = useState('');
   const [data, setData] = useState<VulnerabilityResponse | null>(null);
@@ -58,12 +70,19 @@ export default function InventoryWorkspace() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let timeout = 0;
     const initial = window.setTimeout(() => {
       setAvailableVersions([]);
       setVersionsStale(false);
       setVersionsLoading(false);
       if (!selectedProduct.cpeVendor || !selectedProduct.cpeProduct) return;
       setVersionsLoading(true);
+      timeout = window.setTimeout(() => {
+        controller.abort();
+        setVersionsLoading(false);
+        setVersionsStale(true);
+        setCustomVersion(true);
+      }, 12000);
       const params = new URLSearchParams({
         part: selectedProduct.part,
         cpeVendor: selectedProduct.cpeVendor,
@@ -80,9 +99,9 @@ export default function InventoryWorkspace() {
         .catch(() => {
           if (!controller.signal.aborted) setVersionsStale(true);
         })
-        .finally(() => { if (!controller.signal.aborted) setVersionsLoading(false); });
+        .finally(() => { window.clearTimeout(timeout); if (!controller.signal.aborted) setVersionsLoading(false); });
     }, 0);
-    return () => { window.clearTimeout(initial); controller.abort(); };
+    return () => { window.clearTimeout(initial); window.clearTimeout(timeout); controller.abort(); };
   }, [selectedProduct]);
 
   // Free-text search across the whole catalog: with 55 brands, walking two
@@ -106,6 +125,7 @@ export default function InventoryWorkspace() {
     setProductId(nextProductId);
     setVersion('');
     setCustomVersion(false);
+    setKind(suggestedKind(findProduct(nextVendorId, nextProductId)));
     setCatalogQuery('');
   };
   const selectedAsset = inventory.find((asset) => asset.id === selectedAssetId) ?? inventory[0] ?? null;
@@ -363,6 +383,7 @@ export default function InventoryWorkspace() {
                 const nextVendor = findVendor(event.target.value);
                 setVendorId(nextVendor.id);
                 setProductId(nextVendor.products[0].id);
+                setKind(suggestedKind(nextVendor.products[0]));
                 setVersion('');
                 setCustomVersion(false);
               }}>
@@ -371,7 +392,7 @@ export default function InventoryWorkspace() {
             </label>
             <label>
               <span>Équipement / logiciel</span>
-              <select value={productId} onChange={(event) => { setProductId(event.target.value); setVersion(''); setCustomVersion(false); }}>
+              <select value={productId} onChange={(event) => { setProductId(event.target.value); setKind(suggestedKind(findProduct(vendorId, event.target.value))); setVersion(''); setCustomVersion(false); }}>
                 {selectedVendor.products.map((product) => (
                   <option value={product.id} key={product.id}>{product.name} · {product.family}</option>
                 ))}
@@ -406,7 +427,9 @@ export default function InventoryWorkspace() {
                   <option value={CUSTOM_VERSION}>Autre version…</option>
                 </select>
               )}
-              {versionsStale ? <small>Cache NVD indisponible ou ancien — utilisez la saisie libre si nécessaire.</small> : null}
+              {versionsLoading && !customVersion ? <small>Le catalogue NVD peut être volumineux. Vous pouvez saisir votre version dès maintenant.</small> : null}
+              {versionsStale ? <small>Liste NVD trop lente ou indisponible — saisissez la version exacte installée. La vérification CVE reste fondée sur NVD.</small> : null}
+              {!customVersion ? <button type="button" className="version-back" onClick={() => { setCustomVersion(true); setVersion(''); }}>Saisir ma version exacte →</button> : null}
               {customVersion ? (
                 <button type="button" className="version-back" onClick={() => { setCustomVersion(false); setVersion(''); }}>
                   ← Versions connues
