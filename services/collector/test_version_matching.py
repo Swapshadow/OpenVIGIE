@@ -38,6 +38,20 @@ class MatchingTests(unittest.TestCase):
         ubuntu_match = dict(vulnerable=True, criteria='cpe:2.3:o:canonical:ubuntu_linux:24.04:*:*:*:lts:*:*:*')
         zabbix_match = dict(vulnerable=True, criteria='cpe:2.3:a:zabbix:zabbix:7.4.12:-:*:*:*:*:*:*')
         self.assertEqual(collector.cve_confidence(cve(windows_match), WINDOWS_SERVER), 'confirmed')
+        # Regression: the former broad product query returned ~3891 historical
+        # Windows Server rows. A wildcard without explicit build bounds must
+        # never be interpreted as applicable to Server 2022.
+        broad_windows = dict(vulnerable=True, criteria='cpe:2.3:o:microsoft:windows_server_2022:*:*:*:*:*:*:*:*')
+        older_build = dict(vulnerable=True, criteria='cpe:2.3:o:microsoft:windows_server_2022:*:*:*:*:*:*:*:*',
+                           versionEndExcluding='10.0.20348.0')
+        self.assertEqual(collector.cve_confidence(cve(broad_windows), WINDOWS_SERVER), 'excluded')
+        self.assertEqual(collector.cve_confidence(cve(older_build), WINDOWS_SERVER), 'excluded')
+        with patch.object(collector, 'fetch_json') as fetch:
+            coarse = collector.collect(WINDOWS_SERVER)
+        self.assertEqual(coarse['totalResults'], 0)
+        self.assertEqual(coarse['matching']['method'], 'none')
+        self.assertIn('build exact', coarse['matching']['message'])
+        fetch.assert_not_called()
         self.assertEqual(collector.cve_confidence(cve(ubuntu_match), UBUNTU), 'confirmed')
         self.assertEqual(collector.cve_confidence(cve(zabbix_match), ZABBIX), 'confirmed')
 

@@ -254,6 +254,27 @@ export const vendorCatalog: VendorDefinition[] = [
     ],
   },
   {
+    id: 'docker', name: 'Docker', short: 'DK', products: [
+      { id: 'engine', name: 'Docker Engine', family: 'Conteneurs', part: 'a', cpeVendor: 'docker', cpeProduct: 'docker', advisoryUrl: 'https://docs.docker.com/engine/release-notes/' },
+      { id: 'desktop', name: 'Docker Desktop', family: 'Conteneurs', part: 'a', cpeVendor: 'docker', cpeProduct: 'docker_desktop', advisoryUrl: 'https://docs.docker.com/security/security-announcements/' },
+    ],
+  },
+  {
+    id: 'wazuh', name: 'Wazuh', short: 'WZ', products: [
+      { id: 'wazuh', name: 'Wazuh Platform', family: 'SIEM / XDR', part: 'a', cpeVendor: 'wazuh', cpeProduct: 'wazuh', advisoryUrl: 'https://documentation.wazuh.com/current/release-notes/' },
+    ],
+  },
+  {
+    id: 'oisf', name: 'OISF', short: 'SC', products: [
+      { id: 'suricata', name: 'Suricata', family: 'IDS / IPS', part: 'a', cpeVendor: 'oisf', cpeProduct: 'suricata', advisoryUrl: 'https://suricata.io/download/' },
+    ],
+  },
+  {
+    id: 'openssh', name: 'OpenSSH', short: 'SH', products: [
+      { id: 'openssh', name: 'OpenSSH', family: 'Accès distant', part: 'a', cpeVendor: 'openbsd', cpeProduct: 'openssh', advisoryUrl: 'https://www.openssh.com/security.html' },
+    ],
+  },
+  {
     id: 'redhat', name: 'Red Hat', short: 'RH', products: [
       { id: 'rhel', name: 'Red Hat Enterprise Linux', family: 'Système serveur', part: 'o', cpeVendor: 'redhat', cpeProduct: 'enterprise_linux', advisoryUrl: 'https://access.redhat.com/security/security-updates/' },
     ],
@@ -266,6 +287,11 @@ export const vendorCatalog: VendorDefinition[] = [
   {
     id: 'debian', name: 'Debian', short: 'DEB', products: [
       { id: 'debian-linux', name: 'Debian GNU/Linux', family: 'Système Linux', part: 'o', cpeVendor: 'debian', cpeProduct: 'debian_linux', advisoryUrl: 'https://nvd.nist.gov/vuln/search' },
+    ],
+  },
+  {
+    id: 'alpine', name: 'Alpine Linux', short: 'AL', products: [
+      { id: 'alpine-linux', name: 'Alpine Linux', family: 'Système Linux', part: 'o', cpeVendor: 'alpinelinux', cpeProduct: 'alpine_linux', advisoryUrl: 'https://security.alpinelinux.org/' },
     ],
   },
   {

@@ -1,16 +1,28 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { findProduct, findVendor, vendorCatalog } from './asset-catalog';
+import { findProduct, findVendor, vendorCatalog, type ProductDefinition } from './asset-catalog';
 import { downloadParcReport, type ParcReportAsset } from './parc-report';
 import type { InventoryAsset, Vulnerability, VulnerabilityResponse } from './vulnerability-types';
+import InfrastructureMap from './infrastructure-map';
 
 type DossierTab = 'summary' | 'attack' | 'evidence';
 type SeverityFilter = 'ALL' | 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'KEV';
 
-const STORAGE_KEY = 'openvigie.inventory.v1';
 const AUTO_REFRESH_MS = 24 * 60 * 60 * 1000;
 const CUSTOM_VERSION = '__custom__';
+
+function suggestedKind(product: ProductDefinition): InventoryAsset['kind'] {
+  const category = `${product.name} ${product.family}`.toLowerCase();
+  if (/pare-feu|firewall|fortigate|pfsense/.test(category)) return 'firewall';
+  if (/commut|switch|catalyst|nexus/.test(category)) return 'switch';
+  if (/routeur|routage|router/.test(category)) return 'router';
+  if (/téléphone|phone|ios mobile|android/.test(category)) return 'phone';
+  if (/poste|desktop|workstation|windows 1[01]|macos/.test(category)) return 'workstation';
+  if (/cloud|saas/.test(category)) return 'cloud';
+  if (/service|openssh|vpn|docker/.test(category)) return 'service';
+  return 'server';
+}
 
 function formatDate(value: string) {
   if (!value) return '—';
@@ -27,7 +39,6 @@ function humanValue(value: string | null) {
 
 export default function InventoryWorkspace() {
   const [inventory, setInventory] = useState<InventoryAsset[]>([]);
-  const [hydrated, setHydrated] = useState(false);
   const [selectedAssetId, setSelectedAssetId] = useState('');
   const [vendorId, setVendorId] = useState(vendorCatalog[0].id);
   const [productId, setProductId] = useState(vendorCatalog[0].products[0].id);
@@ -39,6 +50,7 @@ export default function InventoryWorkspace() {
   const [catalogQuery, setCatalogQuery] = useState('');
   const [label, setLabel] = useState('');
   const [exposure, setExposure] = useState('Réseau interne');
+  const [kind, setKind] = useState<InventoryAsset['kind']>(() => suggestedKind(vendorCatalog[0].products[0]));
   const [formOpen, setFormOpen] = useState(true);
   const [formError, setFormError] = useState('');
   const [data, setData] = useState<VulnerabilityResponse | null>(null);
@@ -58,7 +70,8 @@ export default function InventoryWorkspace() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const initial = window.setTimeout(() => {
+    let timer = 0;
+    const load = async () => {
       setAvailableVersions([]);
       setVersionsStale(false);
       setVersionsLoading(false);
@@ -69,20 +82,29 @@ export default function InventoryWorkspace() {
         cpeVendor: selectedProduct.cpeVendor,
         cpeProduct: selectedProduct.cpeProduct,
       });
-      void fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal })
-        .then(async (response) => {
-          const payload = await response.json() as { versions?: string[]; stale?: boolean; error?: string };
+      const poll = async () => {
+        timer = 0;
+        try {
+          const response = await fetch(`/api/catalog/versions?${params}`, { cache: 'no-store', signal: controller.signal });
+          const payload = await response.json() as { versions?: string[]; stale?: boolean; refreshing?: boolean };
           if (controller.signal.aborted) return;
-          if (!response.ok) throw new Error(payload.error ?? 'Versions indisponibles');
+          if (response.status === 202 || payload.refreshing && !payload.versions?.length) {
+            timer = window.setTimeout(() => void poll(), 5000);
+            return;
+          }
+          if (!response.ok) throw new Error('Versions indisponibles');
           setAvailableVersions(payload.versions ?? []);
-          setVersionsStale(Boolean(payload.stale));
-        })
-        .catch(() => {
+          setVersionsStale(Boolean(payload.stale) || !payload.versions?.length);
+        } catch {
           if (!controller.signal.aborted) setVersionsStale(true);
-        })
-        .finally(() => { if (!controller.signal.aborted) setVersionsLoading(false); });
-    }, 0);
-    return () => { window.clearTimeout(initial); controller.abort(); };
+        } finally {
+          if (!controller.signal.aborted && !timer) setVersionsLoading(false);
+        }
+      };
+      void poll();
+    };
+    void load();
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [selectedProduct]);
 
   // Free-text search across the whole catalog: with 55 brands, walking two
@@ -106,6 +128,7 @@ export default function InventoryWorkspace() {
     setProductId(nextProductId);
     setVersion('');
     setCustomVersion(false);
+    setKind(suggestedKind(findProduct(nextVendorId, nextProductId)));
     setCatalogQuery('');
   };
   const selectedAsset = inventory.find((asset) => asset.id === selectedAssetId) ?? inventory[0] ?? null;
@@ -113,31 +136,19 @@ export default function InventoryWorkspace() {
   const assetProduct = selectedAsset ? findProduct(selectedAsset.vendorId, selectedAsset.productId) : null;
 
   useEffect(() => {
-    let active = true;
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      const parsed = stored ? JSON.parse(stored) as InventoryAsset[] : [];
-      if (Array.isArray(parsed)) {
-        queueMicrotask(() => {
-          if (!active) return;
-          setInventory(parsed);
-          setSelectedAssetId(parsed[0]?.id ?? '');
-          setFormOpen(parsed.length === 0);
-          setHydrated(true);
-        });
-      } else {
-        queueMicrotask(() => active && setHydrated(true));
-      }
-    } catch {
-      localStorage.removeItem(STORAGE_KEY);
-      queueMicrotask(() => active && setHydrated(true));
-    }
-    return () => { active = false; };
+    const controller = new AbortController();
+    void fetch('/api/assets', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => {
+        const payload = await response.json() as { assets?: InventoryAsset[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'Inventaire indisponible.');
+        const assets = payload.assets ?? [];
+        setInventory(assets);
+        setSelectedAssetId(assets[0]?.id ?? '');
+        setFormOpen(assets.length === 0);
+      })
+      .catch((error) => { if (!controller.signal.aborted) setFormError(error instanceof Error ? error.message : 'Inventaire indisponible.'); });
+    return () => controller.abort();
   }, []);
-
-  useEffect(() => {
-    if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(inventory));
-  }, [hydrated, inventory]);
 
   const refresh = useCallback(async (force = false) => {
     if (!selectedAsset || !assetVendor || !assetProduct) return;
@@ -249,25 +260,29 @@ export default function InventoryWorkspace() {
     ?? filteredVulnerabilities[0]
     ?? null;
 
-  const addAsset = () => {
+  const addAsset = async () => {
     if (!selectedProduct.versionOptional && !version.trim()) {
       setFormError('Indique la version installée pour obtenir une corrélation fiable.');
       return;
     }
 
-    const id = globalThis.crypto.randomUUID();
-    const asset: InventoryAsset = {
-      id,
-      vendorId,
-      productId,
-      label: label.trim() || selectedProduct.name,
-      version: version.trim(),
-      exposure,
-      createdAt: new Date().toISOString(),
-    };
-    setInventory((current) => [...current, asset]);
+    setFormError('');
+    const response = await fetch('/api/assets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        vendorId, productId, vendorName: selectedVendor.name, productName: selectedProduct.name,
+        label: label.trim() || selectedProduct.name, version: version.trim(), exposure, kind,
+        part: selectedProduct.part, cpeVendor: selectedProduct.cpeVendor ?? '', cpeProduct: selectedProduct.cpeProduct ?? '',
+      }),
+    });
+    const payload = await response.json() as { asset?: InventoryAsset; error?: string };
+    if (!response.ok || !payload.asset) {
+      setFormError(payload.error ?? 'Ajout impossible.');
+      return;
+    }
+    setInventory((current) => [...current, payload.asset!]);
     requestSequence.current += 1;
-    setSelectedAssetId(id);
+    setSelectedAssetId(payload.asset.id);
     setData(null);
     setLabel('');
     setVersion('');
@@ -277,7 +292,7 @@ export default function InventoryWorkspace() {
     setFormOpen(false);
   };
 
-  const removeAsset = (asset: InventoryAsset) => {
+  const removeAsset = async (asset: InventoryAsset) => {
     if (!window.confirm(`Retirer « ${asset.label} » du parc OpenVigie ?`)) return;
     const vendor = findVendor(asset.vendorId);
     const product = findProduct(asset.vendorId, asset.productId);
@@ -289,6 +304,11 @@ export default function InventoryWorkspace() {
     });
     if (product.cpeVendor) params.set('cpeVendor', product.cpeVendor);
     if (product.cpeProduct) params.set('cpeProduct', product.cpeProduct);
+    const response = await fetch(`/api/assets?id=${encodeURIComponent(asset.id)}`, { method: 'DELETE' });
+    if (!response.ok) {
+      setLoadError('Suppression impossible pour cet équipement.');
+      return;
+    }
     void fetch(`/api/vulnerabilities?${params.toString()}`, { method: 'DELETE' });
     const remaining = inventory.filter((item) => item.id !== asset.id);
     requestSequence.current += 1;
@@ -320,6 +340,8 @@ export default function InventoryWorkspace() {
           <button type="button" className="primary-action" onClick={() => setFormOpen((open) => !open)}>{formOpen ? 'Fermer' : '+ Ajouter un équipement'}</button>
         </div>
       </div>
+
+      <InfrastructureMap assets={inventory} selectedId={selectedAssetId} onSelect={setSelectedAssetId} />
 
       {formOpen && (
         <section className="asset-builder glass-panel" aria-labelledby="asset-builder-title">
@@ -364,6 +386,7 @@ export default function InventoryWorkspace() {
                 const nextVendor = findVendor(event.target.value);
                 setVendorId(nextVendor.id);
                 setProductId(nextVendor.products[0].id);
+                setKind(suggestedKind(nextVendor.products[0]));
                 setVersion('');
                 setCustomVersion(false);
               }}>
@@ -372,7 +395,7 @@ export default function InventoryWorkspace() {
             </label>
             <label>
               <span>Équipement / logiciel</span>
-              <select value={productId} onChange={(event) => { setProductId(event.target.value); setVersion(''); setCustomVersion(false); }}>
+              <select value={productId} onChange={(event) => { setProductId(event.target.value); setKind(suggestedKind(findProduct(vendorId, event.target.value))); setVersion(''); setCustomVersion(false); }}>
                 {selectedVendor.products.map((product) => (
                   <option value={product.id} key={product.id}>{product.name} · {product.family}</option>
                 ))}
@@ -387,7 +410,7 @@ export default function InventoryWorkspace() {
                 <input
                   value={version}
                   onChange={(event) => setVersion(event.target.value)}
-                  placeholder={selectedProduct.versionOptional ? 'Service SaaS' : 'Ex. 7.4.2'}
+                  placeholder={selectedProduct.versionOptional ? 'Service SaaS' : 'Version exacte installée (ex. 1.2.3)'}
                   autoFocus
                 />
               ) : (
@@ -407,7 +430,9 @@ export default function InventoryWorkspace() {
                   <option value={CUSTOM_VERSION}>Autre version…</option>
                 </select>
               )}
-              {versionsStale ? <small>Cache NVD indisponible ou ancien — utilisez la saisie libre si nécessaire.</small> : null}
+              {versionsLoading && !customVersion ? <small>Chargement du dictionnaire NVD en arrière-plan. Vous pouvez saisir votre version dès maintenant.</small> : null}
+              {versionsStale ? <small>Le dictionnaire NVD ne fournit pas de liste pour ce produit. Saisissez la version exacte installée.</small> : null}
+              {!customVersion ? <button type="button" className="version-back" onClick={() => { setCustomVersion(true); setVersion(''); }}>Saisir ma version exacte →</button> : null}
               {customVersion ? (
                 <button type="button" className="version-back" onClick={() => { setCustomVersion(false); setVersion(''); }}>
                   ← Versions connues
@@ -428,10 +453,19 @@ export default function InventoryWorkspace() {
                 <option>Cloud / SaaS</option>
               </select>
             </label>
-            <button type="button" className="save-asset" onClick={addAsset}>Ajouter au parc</button>
+            <label>
+              <span>Type de nœud</span>
+              <select value={kind} onChange={(event) => setKind(event.target.value as InventoryAsset['kind'])}>
+                <option value="server">Serveur</option><option value="workstation">Poste de travail</option>
+                <option value="switch">Commutateur</option><option value="router">Routeur</option>
+                <option value="firewall">Pare-feu</option><option value="phone">Téléphone</option>
+                <option value="cloud">Cloud</option><option value="service">Service</option>
+              </select>
+            </label>
+            <button type="button" className="save-asset" onClick={() => void addAsset()}>Ajouter au parc</button>
           </div>
           {formError && <p className="form-error" role="alert">{formError}</p>}
-          <p className="privacy-note">L’inventaire reste dans le navigateur de cette machine. Aucun identifiant, adresse IP ou secret n’est demandé.</p>
+          <p className="privacy-note">L’inventaire est enregistré dans le volume Docker et isolé par organisation. Aucun identifiant technique, adresse IP ou secret n’est demandé.</p>
         </section>
       )}
 
@@ -477,7 +511,7 @@ export default function InventoryWorkspace() {
                   <a href={assetProduct.advisoryUrl} target="_blank" rel="noreferrer">Avis éditeur ↗</a>
                   <button type="button" onClick={() => void refresh(true)} disabled={loading}>{loading ? 'Synchronisation…' : 'Actualiser'}</button>
                   <button type="button" className="deep-patch-trigger" onClick={() => setDeepPatchOpen((open) => !open)} disabled={!selectedCve}>{deepPatchOpen ? 'Fermer le patch' : 'Patch en profondeur'}</button>
-                  <button type="button" className="danger-action" onClick={() => removeAsset(selectedAsset)}>Retirer</button>
+                  <button type="button" className="danger-action" onClick={() => void removeAsset(selectedAsset)}>Retirer</button>
                 </div>
               </header>
 

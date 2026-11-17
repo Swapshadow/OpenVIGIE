@@ -5,11 +5,13 @@ import type { Cadence } from './bulletin-data';
 import InventoryWorkspace from './inventory-workspace';
 import LeakToday from './leak-today';
 import VigiChat from './vigi-chat';
-import BrandRadar from './brand-radar';
 import SettingsMenu from './settings-menu';
 import EmailAlertsConfig from './email-alerts-config';
 import NotificationCenter from './notification-center';
 import { WorkspaceNavigation, type Desk } from './workspace-navigation';
+import { AccountAccess, type Account } from './account-access';
+import CyberBackground from './cyber-background';
+import LighthouseMark from './lighthouse-mark';
 
 type View = 'bulletin' | 'assets';
 type BulletinTab = 'news' | 'leaks';
@@ -35,6 +37,7 @@ function AppIcon({ name }: { name: IconName }) {
 }
 
 export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
+  const [account, setAccount] = useState<Account | null | undefined>(undefined);
   const [view, setView] = useState<View>('bulletin');
   const [settingsView, setSettingsView] = useState<'email' | 'about' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -56,6 +59,15 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
     return () => clearTimeout(timer);
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetch('/api/account/me', { cache: 'no-store', signal: controller.signal })
+      .then(async (response) => response.ok ? (await response.json() as { account: Account }).account : null)
+      .then((value) => setAccount(value))
+      .catch(() => { if (!controller.signal.aborted) setAccount(null); });
+    return () => controller.abort();
+  }, []);
+
   const toggleTheme = useCallback(() => {
     setTheme((current) => {
       const next = current === 'dark' ? 'light' : 'dark';
@@ -73,16 +85,25 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
     });
   }, []);
 
+  if (account === undefined) return <main className="access-loading"><i /><span>Ouverture de votre espace sécurisé…</span></main>;
+  if (account === null) return <AccountAccess onAuthenticated={setAccount} />;
+
+  const logout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setAccount(null);
+  };
+
   return (
     <main className="app-shell">
+      <CyberBackground subtle />
       <a className="skip-link" href="#workspace-content">Aller au contenu</a>
 
       <header className="topbar glass-panel">
         <button className="brand" type="button" aria-label="OpenVigie, retour au bulletin" onClick={() => { openDesk('fil'); setNotificationsOpen(false); }}>
-          <span className="brand-mark"><BrandRadar /></span>
+          <span className="brand-mark"><LighthouseMark /></span>
           <span><b>open</b>vigie<span className="brand-caption">CYBER INTELLIGENCE</span></span>
         </button>
-        <div className="sync-state"><AppIcon name="radar" />Votre espace de veille</div>
+        <div className="sync-state"><AppIcon name="radar" /><span>{account.organization.name}<small>Espace isolé · {account.displayName}</small></span></div>
         <div className="top-actions">
           <button
             type="button"
@@ -96,12 +117,13 @@ export default function AppShell({ bulletin }: { bulletin: React.ReactNode }) {
           <button type="button" className="header-search" onClick={() => openDesk('recherche')}><AppIcon name="search" /><span>Rechercher</span></button>
           <NotificationCenter open={notificationsOpen} onOpenChange={setNotificationsOpen} />
           <SettingsMenu theme={theme} onTheme={toggleTheme} onEmail={() => setSettingsView('email')} onNotifications={() => setNotificationsOpen(true)} onInventory={() => navigate('assets')} onAbout={() => setSettingsView('about')} />
+          <button type="button" className="logout-action" onClick={() => void logout()}>Déconnexion</button>
         </div>
       </header>
 
       <div className="workspace">
         <aside className="sidebar glass-panel" aria-label="Navigation principale">
-          <div className="workspace-label"><span>OV</span><div>Espace de travail<small>Veille & infrastructure</small></div></div>
+          <div className="workspace-label"><span><LighthouseMark /></span><div>Espace de travail<small>Veille & infrastructure</small></div></div>
           <p className="eyebrow">Explorer</p>
           <nav className="nav-list">
             {([

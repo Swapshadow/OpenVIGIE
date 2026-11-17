@@ -20,6 +20,14 @@ class AlertTests(unittest.TestCase):
         self.db = patch.object(collector, 'DB_PATH', self.temp.name + '/test.db')
         self.db.start()
         collector.initialize_database()
+        with collector.connect() as connection:
+            connection.execute("INSERT INTO organizations VALUES('test-org','Test Org','test-org',0)")
+            connection.execute("INSERT INTO users VALUES('test-user','test-org','test@example.com','Test',?,'owner',0)",
+                               (collector.password_digest('a sufficiently long password'),))
+            self.token = collector.create_session(connection, 'test-user')
+        self.keys = patch.object(collector, 'organization_asset_cache_keys',
+                                 return_value=('equipment', 'forti', 'one', 'two', 'test', 'legacy'))
+        self.keys_mock = self.keys.start()
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), collector.Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -30,17 +38,22 @@ class AlertTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
         self.db.stop()
+        self.keys.stop()
         self.env.stop()
         self.temp.cleanup()
 
-    def request(self, path, method='GET', data=None):
-        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_port}{path}', data=None if data is None else json.dumps(data).encode(), method=method, headers={'Content-Type': 'application/json'})
+    def request(self, path, method='GET', data=None, token=None):
+        request = urllib.request.Request(f'http://127.0.0.1:{self.server.server_port}{path}', data=None if data is None else json.dumps(data).encode(), method=method, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token or self.token}'})
         try:
             response = urllib.request.urlopen(request)
         except urllib.error.HTTPError as error:
             response = error
         with response:
-            return response.status, json.load(response)
+            result = response.status, json.load(response)
+        if path == '/settings/email-config' and method == 'POST' and result[0] == 200:
+            with collector.connect() as connection:
+                connection.execute("UPDATE organization_email_config SET created_at=0 WHERE organization_id='test-org'")
+        return result
 
     def seed(self):
         query = {'vendor': 'Example', 'product': 'Firewall', 'version': '1.0'}
@@ -48,19 +61,52 @@ class AlertTests(unittest.TestCase):
         with collector.connect() as connection:
             notifier.record(connection, 'equipment', query, {'vulnerabilities': [{'id': 'CVE-2026-12345', 'severity': 'CRITICAL', 'confidence': 'confirmed'}]})
 
+    def test_second_organization_cannot_read_email_settings_or_notifications(self):
+        self.seed()
+        self.request('/settings/email-config', 'POST', self.settings)
+        self.request('/settings/email-recipients', 'POST', {'email': 'private@example.com'})
+        with collector.connect() as connection:
+            connection.execute("INSERT INTO organizations VALUES('other-org','Other','other',0)")
+            connection.execute("INSERT INTO users VALUES('other-user','other-org','other@example.com','Other',?,'owner',0)",
+                               (collector.password_digest('another sufficiently long password'),))
+            other_token = collector.create_session(connection, 'other-user')
+        self.keys_mock.side_effect = lambda org_id: ('equipment',) if org_id == 'test-org' else ()
+        self.assertIsNone(self.request('/settings/email-config', token=other_token)[1]['config'])
+        self.assertEqual(self.request('/settings/email-recipients', token=other_token)[1]['recipients'], [])
+        self.assertEqual(self.request('/notifications', token=other_token)[1]['notifications'], [])
+        self.assertEqual(self.request('/settings/email-recipients', 'DELETE', {'id': 1}, other_token)[0], 404)
+        self.assertEqual(len(self.request('/settings/email-recipients')[1]['recipients']), 1)
+        self.keys_mock.side_effect = lambda _org_id: ('equipment',)
+        notification_id = self.request('/notifications', token=other_token)[1]['notifications'][0]['id']
+        self.request('/notifications/read', 'POST', {'id': notification_id}, other_token)
+        self.assertEqual(self.request('/notifications', token=other_token)[1]['unread_count'], 0)
+        self.assertEqual(self.request('/notifications')[1]['unread_count'], 1)
+        self.keys_mock.side_effect = lambda org_id: ('equipment',) if org_id == 'test-org' else ()
+        self.request('/settings/email-config', 'POST', self.settings, other_token)
+        self.request('/settings/email-recipients', 'POST', {'email': 'other-recipient@example.com'}, other_token)
+        with collector.connect() as connection:
+            connection.execute("UPDATE organization_email_config SET created_at=0 WHERE organization_id='other-org'")
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.send_message.return_value = {}
+        with patch.object(notifier, 'smtp_session', return_value=client):
+            notifier.deliver_pending(collector.connect)
+        self.assertEqual([call.args[0]['To'] for call in client.send_message.call_args_list],
+                         ['private@example.com'])
+
     def test_encryption_redaction_and_preservation(self):
         status, body = self.request('/settings/email-config', 'POST', self.settings)
         self.assertEqual(status, 200)
         self.assertNotIn('password', body['config'])
         with collector.connect() as connection:
-            encrypted = notifier.config(connection)['password_encrypted']
+            encrypted = notifier.config(connection, 'test-org')['password_encrypted']
         self.assertNotIn(self.settings['password'], encrypted)
         self.assertEqual(notifier.cipher().decrypt(encrypted.encode()).decode(), self.settings['password'])
         self.assertEqual(self.request('/settings/email-config', 'POST', {**self.settings, 'password': ''})[0], 200)
         self.assertNotIn('password_encrypted', str(self.request('/settings/email-config')))
         self.assertEqual(self.request('/settings/email-config', 'POST', {**self.settings, 'password': '', 'host': 'other.example.com'})[0], 400)
         with collector.connect() as connection:
-            self.assertEqual(encrypted, notifier.config(connection)['password_encrypted'])
+            self.assertEqual(encrypted, notifier.config(connection, 'test-org')['password_encrypted'])
         with patch.dict(os.environ, {'OPENVIGIE_SECRET_KEY': ''}):
             self.assertEqual(self.request('/settings/email-config', 'POST', self.settings)[0], 400)
 
@@ -103,7 +149,9 @@ class AlertTests(unittest.TestCase):
         with patch.object(notifier, 'smtp_session', return_value=client), redirect_stdout(io.StringIO()) as output:
             notifier.deliver_pending(collector.connect)
         self.assertNotIn('SMTP-super-secret', output.getvalue())
-        self.assertEqual(self.request('/notifications')[1]['notifications'][0]['email_sent'], 0)
+        with collector.connect() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM organization_digest_deliveries WHERE organization_id='test-org'").fetchone()[0], 1)
         with collector.connect() as connection:
             connection.execute('UPDATE detection_cycles SET next_attempt=0')
         client.send_message.reset_mock(side_effect=True)
@@ -112,7 +160,9 @@ class AlertTests(unittest.TestCase):
             notifier.deliver_pending(collector.connect)
         self.assertEqual(client.send_message.call_count, 1)
         self.assertEqual(client.send_message.call_args.args[0]['To'], 'b@example.com')
-        self.assertEqual(self.request('/notifications')[1]['notifications'][0]['email_sent'], 1)
+        with collector.connect() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM organization_digest_deliveries WHERE organization_id='test-org'").fetchone()[0], 2)
 
     def test_tls_and_error_redaction(self):
         settings = notifier.validated(self.settings, None)
@@ -138,6 +188,7 @@ class AlertTests(unittest.TestCase):
             smtp.assert_not_called()
         self.request('/settings/email-config', 'POST', self.settings)
         collector.delete_query('equipment')
+        self.keys_mock.return_value = ()
         with patch.object(notifier, 'smtp_session') as smtp:
             notifier.deliver_pending(collector.connect)
             smtp.assert_not_called()
@@ -190,7 +241,8 @@ class AlertTests(unittest.TestCase):
         text = message.get_content()
         self.assertLess(text.index('CVE-2026-10068'), text.index('CVE-2026-10000'))
         with collector.connect() as db:
-            self.assertEqual(db.execute('SELECT COUNT(*) FROM notifications WHERE initial_scan=1 AND email_sent=1').fetchone()[0], 69)
+            self.assertEqual(db.execute(
+                "SELECT COUNT(*) FROM organization_digest_deliveries WHERE organization_id='test-org'").fetchone()[0], 1)
             notifier.record(db, 'forti', query, {'vulnerabilities':vulnerabilities})
         client.send_message.reset_mock()
         with patch.object(notifier,'smtp_session',return_value=client):

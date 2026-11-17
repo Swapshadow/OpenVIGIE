@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 export async function GET(request: Request) {
-  const collectorBase = process.env.OPENVIGIE_COLLECTOR_URL?.replace(/\/$/, '');
+  const collectorBase = (process.env.OPENVIGIE_COLLECTOR_URL ?? 'http://collector:8787').replace(/\/$/, '');
   if (!collectorBase) return NextResponse.json({ error: 'La veille des fuites est disponible avec Docker.' }, { status: 503 });
   const incoming = new URL(request.url);
   const requestedDays = incoming.searchParams.get('days') ?? 'all';

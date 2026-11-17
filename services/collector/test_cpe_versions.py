@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -30,6 +31,29 @@ class CpeVersionCacheTests(unittest.TestCase):
         self.assertFalse(fresh['cached'])
         self.assertTrue(cached['cached'])
         self.assertEqual(fetch.call_count, 1)
+
+    def test_uncached_versions_return_immediately_then_fill_cache(self):
+        release = threading.Event()
+        finished = threading.Event()
+
+        def slow_fetch(*_args):
+            release.wait(3)
+            finished.set()
+            return ['17.9.4']
+
+        with patch.object(collector, 'fetch_dictionary_versions', side_effect=slow_fetch):
+            status, pending = collector.catalog_versions_nonblocking('o', 'cisco', 'ios_xe')
+            self.assertEqual(status, 202)
+            self.assertTrue(pending['refreshing'])
+            release.set()
+            self.assertTrue(finished.wait(3))
+            for _ in range(30):
+                status, ready = collector.catalog_versions_nonblocking('o', 'cisco', 'ios_xe')
+                if status == 200:
+                    break
+                threading.Event().wait(.02)
+            self.assertEqual(status, 200)
+            self.assertEqual(ready['versions'], ['17.9.4'])
 
     def test_sql_aliases_surface_release_2025_from_dictionary_identity(self):
         def response(url):
