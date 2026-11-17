@@ -59,6 +59,7 @@ export default function CyberBackground({ subtle = false }: { subtle?: boolean }
   return <div className={`cyber-background${subtle ? ' cyber-background-subtle' : ''}`} aria-hidden="true">
     <canvas ref={canvas} />
     <span className="cyber-object planet planet-one" /><span className="cyber-object planet planet-two" />
+    <span className="cyber-object cyber-sun" />
     <span className="cyber-object rocket rocket-one">🚀</span><span className="cyber-object rocket rocket-two">🚀</span>
     <span className="cyber-object saucer">🛸</span><span className="cyber-object ethereum">Ξ</span>
     <span className="cyber-object microsoft-mark"><i /><i /><i /><i /></span>

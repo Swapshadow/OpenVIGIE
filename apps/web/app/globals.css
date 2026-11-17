@@ -1669,6 +1669,9 @@ button.brand { border: 0; padding: 0; background: transparent; cursor: pointer; 
 .planet { width: 78px; height: 78px; border-radius: 50%; background: radial-gradient(circle at 35% 28%,#a4f9dc,#327f8d 34%,#172943 72%); box-shadow: inset -14px -12px 22px #07101e,0 0 35px #60efcb55; }
 .planet:after { content: ''; position: absolute; inset: 29px -26px; border: 2px solid #89e8d89c; border-radius: 50%; transform: rotate(-25deg); }
 .planet-one { left: 6%; top: 14%; transform: scale(.7); }.planet-two { right: 6%; bottom: 14%; transform: scale(1.1); }
+.cyber-sun { left: 51%; top: 20%; width: 70px; height: 70px; border-radius: 50%; opacity: .38; background: radial-gradient(circle at 36% 33%,#fff7c2 0,#ffd471 30%,#e88442 65%,#a84b33 100%); box-shadow: 0 0 24px 8px #e9985155,0 0 76px 25px #e9985129; animation: cyber-sun-glow 8s ease-in-out infinite alternate; }
+.cyber-sun:before { content: ''; position: absolute; inset: -23px; border-radius: 50%; border: 1px dashed #ffc47275; }
+@keyframes cyber-sun-glow { to { box-shadow: 0 0 34px 12px #e9985177,0 0 95px 35px #e9985133; transform: scale(1.06); } }
 .rocket { font-size: 33px; animation: cyber-flight 24s ease-in-out infinite alternate; }.rocket-one { left: 29%; top: 10%; }.rocket-two { right: 22%; bottom: 8%; animation-delay: -13s; }
 .saucer { left: 7%; bottom: 23%; font-size: 42px; animation: cyber-hover 11s ease-in-out infinite alternate; }
 .ethereum { right: 27%; top: 7%; font-size: 44px; font-weight: 200; color: #b5b8ff; animation: cyber-hover 13s ease-in-out infinite alternate; }
@@ -1683,7 +1686,7 @@ button.brand { border: 0; padding: 0; background: transparent; cursor: pointer; 
 .docker-mark { right: 13%; bottom: 5%; background-image: url('/brand/docker.svg'); animation-delay: -5s; }
 @keyframes cyber-flight { from { transform: translate3d(-50px,30px,0) rotate(-25deg); } to { transform: translate3d(90px,-60px,0) rotate(8deg); } }
 @keyframes cyber-hover { to { transform: translate3d(35px,-25px,0) rotate(8deg); } }
-@media (max-width: 850px) { .cyber-object { opacity: .25; }.brand-orbit,.apple-mark,.linux-mark { display: none; }.planet-one { left: 3%; top: 5%; transform: scale(.45); }.planet-two { right: 3%; bottom: 4%; transform: scale(.55); } }
+@media (max-width: 850px) { .cyber-object { opacity: .25; }.brand-orbit,.apple-mark,.linux-mark { display: none; }.planet-one { left: 3%; top: 5%; transform: scale(.45); }.planet-two { right: 3%; bottom: 4%; transform: scale(.55); }.cyber-sun { left: auto; right: 8%; top: 5%; transform: scale(.6); } }
 @media (prefers-reduced-motion: reduce) { .cyber-object { animation: none!important; } }
 .radar-wave { transform-origin: 16px 16px; animation: radar-wave 2.8s ease-out infinite; }
 .radar-wave-delayed { animation-delay: -1.4s; }
