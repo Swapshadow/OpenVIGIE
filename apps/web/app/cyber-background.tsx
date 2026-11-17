@@ -63,7 +63,8 @@ export default function CyberBackground({ subtle = false }: { subtle?: boolean }
     <span className="cyber-object saucer">🛸</span><span className="cyber-object ethereum">Ξ</span>
     <span className="cyber-object microsoft-mark"><i /><i /><i /><i /></span>
     <span className="cyber-object linux-mark">🐧</span><span className="cyber-object apple-mark">●<i>⌁</i></span>
-    <span className="cyber-object vendor-mark fortinet-mark">FORTINET</span>
-    <span className="cyber-object vendor-mark sentinel-mark">SentinelOne</span>
+    <span className="cyber-object brand-orbit fortinet-mark" /><span className="cyber-object brand-orbit sentinel-mark" />
+    <span className="cyber-object brand-orbit ubuntu-mark" /><span className="cyber-object brand-orbit debian-mark" />
+    <span className="cyber-object brand-orbit redhat-mark" /><span className="cyber-object brand-orbit docker-mark" />
   </div>;
 }

@@ -1674,10 +1674,16 @@ button.brand { border: 0; padding: 0; background: transparent; cursor: pointer; 
 .ethereum { right: 27%; top: 7%; font-size: 44px; font-weight: 200; color: #b5b8ff; animation: cyber-hover 13s ease-in-out infinite alternate; }
 .microsoft-mark { right: 9%; top: 35%; display: grid; grid-template-columns: repeat(2, 13px); gap: 3px; transform: rotate(-9deg); }.microsoft-mark i { display: block; width: 13px; height: 13px; background: #69d8bd; }.microsoft-mark i:nth-child(2) { background: #6ba3e9; }.microsoft-mark i:nth-child(3) { background: #f2a969; }.microsoft-mark i:nth-child(4) { background: #e1d57b; }
 .linux-mark { left: 40%; bottom: 12%; font-size: 38px; }.apple-mark { right: 37%; bottom: 26%; font-size: 42px; color: #d7e5ed; }.apple-mark i { position: absolute; top: -14px; left: 20px; font-size: 18px; transform: rotate(-40deg); }
-.vendor-mark { color: #8bbebd; font-size: 11px; font-weight: 800; letter-spacing: .14em; }.fortinet-mark { left: 3%; bottom: 6%; }.sentinel-mark { right: 3%; top: 10%; }
+.brand-orbit { width: 40px; height: 40px; background-repeat: no-repeat; background-size: contain; background-position: center; animation: cyber-hover 17s ease-in-out infinite alternate; }
+.fortinet-mark { left: 3%; bottom: 6%; background-image: url('/brand/fortinet.svg'); }
+.sentinel-mark { right: 3%; top: 10%; background-image: url('/brand/sentinelone.svg'); }
+.ubuntu-mark { left: 47%; top: 7%; background-image: url('/brand/ubuntu.svg'); animation-delay: -3s; }
+.debian-mark { left: 31%; bottom: 8%; background-image: url('/brand/debian.svg'); animation-delay: -7s; }
+.redhat-mark { right: 19%; top: 19%; background-image: url('/brand/redhat.svg'); animation-delay: -11s; }
+.docker-mark { right: 13%; bottom: 5%; background-image: url('/brand/docker.svg'); animation-delay: -5s; }
 @keyframes cyber-flight { from { transform: translate3d(-50px,30px,0) rotate(-25deg); } to { transform: translate3d(90px,-60px,0) rotate(8deg); } }
 @keyframes cyber-hover { to { transform: translate3d(35px,-25px,0) rotate(8deg); } }
-@media (max-width: 850px) { .cyber-object { opacity: .25; }.vendor-mark,.apple-mark,.linux-mark { display: none; }.planet-one { left: 3%; top: 5%; transform: scale(.45); }.planet-two { right: 3%; bottom: 4%; transform: scale(.55); } }
+@media (max-width: 850px) { .cyber-object { opacity: .25; }.brand-orbit,.apple-mark,.linux-mark { display: none; }.planet-one { left: 3%; top: 5%; transform: scale(.45); }.planet-two { right: 3%; bottom: 4%; transform: scale(.55); } }
 @media (prefers-reduced-motion: reduce) { .cyber-object { animation: none!important; } }
 .radar-wave { transform-origin: 16px 16px; animation: radar-wave 2.8s ease-out infinite; }
 .radar-wave-delayed { animation-delay: -1.4s; }
