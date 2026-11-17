@@ -407,7 +407,7 @@ export default function InventoryWorkspace() {
                 <input
                   value={version}
                   onChange={(event) => setVersion(event.target.value)}
-                  placeholder={selectedProduct.versionOptional ? 'Service SaaS' : 'Ex. 7.4.2'}
+                  placeholder={selectedProduct.versionOptional ? 'Service SaaS' : 'Version exacte installée (ex. 1.2.3)'}
                   autoFocus
                 />
               ) : (
