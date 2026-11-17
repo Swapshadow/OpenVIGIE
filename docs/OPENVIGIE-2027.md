@@ -23,6 +23,8 @@ L’API NVD est régulée à une requête toutes les 6,2 secondes sans clé et 0
 - Les sessions aléatoires sont conservées sous forme de hash et remises au navigateur dans un cookie HttpOnly, `SameSite=Strict`.
 - Chaque équipement porte obligatoirement l’identifiant de son organisation. Les lectures et suppressions utilisent simultanément l’identifiant de l’équipement et celui de l’organisation.
 - Le rapport hebdomadaire lit uniquement les équipements de l’organisation de la session. Il ne déclenche pas une collecte NVD synchrone : il exploite les instantanés stricts déjà vérifiés et signale les équipements non vérifiés.
+- Les paramètres SMTP et destinataires sont enregistrés par organisation. Les notifications affichées et leurs états de lecture sont limités aux équipements du parc de cette organisation. Les emails de détection utilisent uniquement les destinataires et les équipements de la même organisation.
+- Les anciens paramètres SMTP et destinataires globaux restent dans le volume pour permettre une reprise manuelle, mais ne sont plus utilisés par l’application. Après la mise à jour, chaque organisation doit reconfigurer ses alertes email. Aucun secret n’est copié automatiquement vers une organisation.
 
 ## Mise à jour Docker sans perte de données
 
@@ -53,4 +55,5 @@ Les volumes `openvigie_data`, `openvigie_ollama`, `openvigie_caddy_data` et `ope
 - construction Docker locale ;
 - parcours d’inscription, inventaire, cartographie et rapport ;
 - recherche de secrets et contrôle des fichiers suivis ;
-- release uniquement si l’isolation email et les critères de migration ont également été validés.
+- isolation croisée des paramètres email, destinataires, notifications et distributions ;
+- publication seulement après réussite des contrôles locaux et GitHub.

@@ -1,8 +1,7 @@
 # OpenVIGIE 2027 — notes de version candidates
 
-> Statut : candidate de branche. Ne pas publier comme release tant que la
-> configuration et la distribution des emails n'ont pas été migrées vers un
-> stockage strictement isolé par organisation.
+> Statut : notes de version de la branche 2027. Vérifier les contrôles GitHub
+> et la mise à jour Docker avant publication.
 
 ## Points forts
 
@@ -25,6 +24,8 @@
   automatiquement désactivées avec `prefers-reduced-motion`.
 - Dépendances actualisées, audit sans vulnérabilité connue et CI dédiée au
   collecteur.
+- Paramètres SMTP, destinataires, lecture des notifications et distributions
+  d'alertes isolés par organisation et limités aux équipements de son parc.
 
 ## Mise à jour Docker sans perte de données
 
@@ -46,5 +47,6 @@
   les rapports programmés réutilisent ensuite uniquement le cache vérifié.
 - Une clé NVD reste facultative mais augmente le débit autorisé par NVD. Elle
   doit rester dans l'environnement d'exécution.
-- La release publique doit rester bloquée jusqu'à validation de l'isolation
-  multitenant des paramètres SMTP, destinataires et distributions d'emails.
+- Après migration, reconfigurer les alertes email dans chaque organisation :
+  les anciens réglages globaux ne sont pas attribués automatiquement à un
+  compte. Ils restent dans la sauvegarde du volume et ne sont plus utilisés.

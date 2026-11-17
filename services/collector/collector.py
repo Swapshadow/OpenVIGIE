@@ -711,6 +711,17 @@ def organization_assets(organization_id: str) -> list[dict]:
     return [serialize_asset(row) for row in rows]
 
 
+def organization_asset_cache_keys(organization_id: str) -> tuple[str, ...]:
+    keys = []
+    for asset in organization_assets(organization_id):
+        keys.append(cache_key({
+            'vendor': asset['vendorName'], 'product': asset['productName'],
+            'version': asset['version'], 'part': asset['part'],
+            'cpeVendor': asset['cpeVendor'], 'cpeProduct': asset['cpeProduct'],
+        }))
+    return tuple(dict.fromkeys(keys))
+
+
 def validate_text(value: str, maximum: int) -> str:
     value = value.strip()[:maximum]
     if not SAFE_TEXT.fullmatch(value):

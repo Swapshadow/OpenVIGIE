@@ -47,6 +47,20 @@ def initialize(connection):
       CREATE TABLE IF NOT EXISTS notification_deliveries (
         notification_id INTEGER NOT NULL, recipient TEXT NOT NULL,
         PRIMARY KEY(notification_id, recipient));
+      CREATE TABLE IF NOT EXISTS organization_email_config (
+        organization_id TEXT PRIMARY KEY, provider TEXT NOT NULL, host TEXT NOT NULL,
+        port INTEGER NOT NULL, security TEXT NOT NULL, username TEXT NOT NULL,
+        sender TEXT NOT NULL, enabled INTEGER NOT NULL, password_encrypted TEXT NOT NULL,
+        created_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS organization_email_recipients (
+        id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL,
+        email TEXT NOT NULL COLLATE NOCASE, UNIQUE(organization_id,email));
+      CREATE TABLE IF NOT EXISTS organization_notification_reads (
+        organization_id TEXT NOT NULL, notification_id INTEGER NOT NULL,
+        PRIMARY KEY(organization_id,notification_id));
+      CREATE TABLE IF NOT EXISTS organization_digest_deliveries (
+        organization_id TEXT NOT NULL, cycle_id TEXT NOT NULL, recipient TEXT NOT NULL,
+        PRIMARY KEY(organization_id,cycle_id,recipient));
     ''')
 
     columns = {row[1] for row in connection.execute('PRAGMA table_info(notifications)')}
@@ -78,13 +92,14 @@ def initialize(connection):
 
 
 
-def config(connection):
-    row = connection.execute('SELECT * FROM email_config WHERE id=1').fetchone()
+def config(connection, organization_id=None):
+    row = (connection.execute('SELECT * FROM organization_email_config WHERE organization_id=?', (organization_id,)).fetchone()
+           if organization_id else connection.execute('SELECT * FROM email_config WHERE id=1').fetchone())
     return dict(row) if row else None
 
 
-def public_config(connection):
-    stored = config(connection)
+def public_config(connection, organization_id=None):
+    stored = config(connection, organization_id)
     result = {k: stored[k] for k in PUBLIC_FIELDS} if stored else None
     if result:
         result['has_password'] = bool(stored['password_encrypted'])
@@ -201,7 +216,7 @@ def digest_message(settings, cycle, rows, recipient):
     return message
 
 
-def deliver_pending(connect):
+def deliver_pending_legacy(connect):
     if not SEND_LOCK.acquire(blocking=False):
         return
     try:
@@ -237,6 +252,61 @@ def deliver_pending(connect):
         SEND_LOCK.release()
 
 
+def deliver_pending(connect):
+    """Send each organization's confirmed CVEs only for its declared assets."""
+    if not SEND_LOCK.acquire(blocking=False):
+        return
+    try:
+        import collector  # Import here to avoid a module import cycle.
+        with connect() as connection:
+            organizations = connection.execute('SELECT organization_id FROM organization_email_config WHERE enabled=1').fetchall()
+        for organization in organizations:
+            org_id = organization['organization_id']
+            with connect() as connection:
+                settings = config(connection, org_id)
+                recipients = [row['email'] for row in connection.execute(
+                    'SELECT email FROM organization_email_recipients WHERE organization_id=?', (org_id,))]
+            if not settings or not recipients:
+                continue
+            keys = collector.organization_asset_cache_keys(org_id)
+            if not keys:
+                continue
+            placeholders = ','.join('?' for _ in keys)
+            with connect() as connection:
+                cycles = connection.execute(
+                    f'SELECT * FROM detection_cycles WHERE equipment IN ({placeholders}) AND created_at>=? '
+                    'AND next_attempt<=? ORDER BY created_at,id LIMIT 20',
+                    (*keys, settings['created_at'], int(time.time())),
+                ).fetchall()
+            for cycle in cycles:
+                try:
+                    with connect() as connection:
+                        rows = connection.execute(
+                            "SELECT * FROM notifications WHERE cycle_id=? AND confidence='confirmed'", (cycle['id'],)).fetchall()
+                    if not rows and not cycle['initial_scan']:
+                        continue
+                    for recipient in recipients:
+                        with connect() as connection:
+                            sent = connection.execute(
+                                'SELECT 1 FROM organization_digest_deliveries WHERE organization_id=? AND cycle_id=? AND recipient=?',
+                                (org_id, cycle['id'], recipient),
+                            ).fetchone()
+                        if sent:
+                            continue
+                        with smtp_session(settings) as client:
+                            if client.send_message(digest_message(settings, cycle, rows, recipient)):
+                                raise RuntimeError('Recipient refused')
+                        with connect() as connection:
+                            connection.execute('INSERT OR IGNORE INTO organization_digest_deliveries VALUES(?,?,?)',
+                                               (org_id, cycle['id'], recipient))
+                except Exception:
+                    with connect() as connection:
+                        connection.execute('UPDATE detection_cycles SET next_attempt=? WHERE id=?',
+                                           (int(time.time()) + 300, cycle['id']))
+    finally:
+        SEND_LOCK.release()
+
+
 def scheduler(connect):
     while True:
         try:
@@ -247,6 +317,115 @@ def scheduler(connect):
 
 
 def handle(handler, connect):
+    import collector
+    parsed = urlparse(handler.path)
+    path, method = parsed.path, handler.command
+    routes = {
+        '/settings/email-config': ('GET', 'POST'), '/settings/email-config/test': ('POST',),
+        '/settings/email-recipients': ('GET', 'POST', 'PUT', 'DELETE'),
+        '/notifications': ('GET',), '/notifications/read': ('POST',),
+        '/notifications/mark-all-read': ('POST',),
+    }
+    if path not in routes:
+        return False
+    if method not in routes[path]:
+        handler.send_json(405, {'error': 'Méthode non autorisée.'})
+        return True
+    org_id = handler.organization_id
+    try:
+        payload = {}
+        if method in ('POST', 'PUT', 'DELETE'):
+            length = int(handler.headers.get('Content-Length', '0'))
+            if not 0 <= length <= 16384:
+                raise ValueError('Corps de requête invalide.')
+            payload = json.loads(handler.rfile.read(length) or b'{}')
+            if not isinstance(payload, dict):
+                raise ValueError('Objet JSON requis.')
+        with connect() as connection:
+            if path == '/settings/email-config':
+                if method == 'POST':
+                    previous = config(connection, org_id)
+                    settings = validated(payload, previous)
+                    fields = (*PUBLIC_FIELDS, 'password_encrypted')
+                    connection.execute(
+                        f"INSERT INTO organization_email_config(organization_id,{','.join(fields)},created_at) "
+                        f"VALUES(?,{','.join('?' for _ in fields)},?) ON CONFLICT(organization_id) DO UPDATE SET "
+                        + ','.join(f'{field}=excluded.{field}' for field in fields),
+                        (org_id, *(settings[field] for field in fields), previous['created_at'] if previous else int(time.time())),
+                    )
+                result = public_config(connection, org_id)
+            elif path.endswith('/test'):
+                settings = validated(payload, config(connection, org_id)) if payload else config(connection, org_id)
+                if not settings:
+                    raise ValueError('Configurez SMTP au préalable.')
+                with smtp_session(settings):
+                    pass
+                result = {'success': True, 'message': 'Connexion TLS et authentification SMTP réussies.'}
+            elif path == '/settings/email-recipients':
+                if method == 'POST':
+                    connection.execute('INSERT INTO organization_email_recipients(organization_id,email) VALUES(?,?)',
+                                       (org_id, address(payload.get('email'))))
+                elif method in ('PUT', 'DELETE'):
+                    item_id = int(payload.get('id', parse_qs(parsed.query).get('id', [''])[0]))
+                    if method == 'DELETE':
+                        cursor = connection.execute('DELETE FROM organization_email_recipients WHERE id=? AND organization_id=?',
+                                                    (item_id, org_id))
+                    else:
+                        cursor = connection.execute('UPDATE organization_email_recipients SET email=? WHERE id=? AND organization_id=?',
+                                                    (address(payload.get('email')), item_id, org_id))
+                    if not cursor.rowcount:
+                        handler.send_json(404, {'error': 'Destinataire introuvable.'})
+                        return True
+                result = {'recipients': [dict(row) for row in connection.execute(
+                    'SELECT id,email FROM organization_email_recipients WHERE organization_id=? ORDER BY id', (org_id,))]}
+            else:
+                keys = collector.organization_asset_cache_keys(org_id)
+                placeholders = ','.join('?' for _ in keys) or "''"
+                scope = f"equipment IN ({placeholders}) AND confidence='confirmed'"
+                if path == '/notifications':
+                    offset = max(0, int(parse_qs(parsed.query).get('offset', ['0'])[0]))
+                    rows = connection.execute(
+                        f'SELECT * FROM notifications WHERE {scope} ORDER BY id DESC LIMIT 50 OFFSET ?', (*keys, offset)).fetchall()
+                    read_ids = {row['notification_id'] for row in connection.execute(
+                        'SELECT notification_id FROM organization_notification_reads WHERE organization_id=?', (org_id,))}
+                    sent_cycles = {row['cycle_id'] for row in connection.execute(
+                        'SELECT DISTINCT cycle_id FROM organization_digest_deliveries WHERE organization_id=?', (org_id,))}
+                    count = connection.execute(f'SELECT COUNT(*) FROM notifications WHERE {scope}', keys).fetchone()[0]
+                    unread = connection.execute(
+                        f'SELECT COUNT(*) FROM notifications WHERE {scope} AND id NOT IN '
+                        '(SELECT notification_id FROM organization_notification_reads WHERE organization_id=?)',
+                        (*keys, org_id),
+                    ).fetchone()[0]
+                    result = {'notifications': [{**dict(row), 'read': int(row['id'] in read_ids),
+                                                 'email_sent': int(row['cycle_id'] in sent_cycles)} for row in rows],
+                              'unread_count': unread, 'has_more': count > offset + len(rows)}
+                else:
+                    if path.endswith('/mark-all-read'):
+                        connection.execute(
+                            f'INSERT OR IGNORE INTO organization_notification_reads '
+                            f'SELECT ?,id FROM notifications WHERE {scope}', (org_id, *keys))
+                    else:
+                        if type(payload.get('id')) is not int:
+                            raise ValueError('Identifiant invalide.')
+                        row = connection.execute(f'SELECT id FROM notifications WHERE id=? AND {scope}',
+                                                 (payload['id'], *keys)).fetchone()
+                        if not row:
+                            handler.send_json(404, {'error': 'Notification introuvable.'})
+                            return True
+                        connection.execute('INSERT OR IGNORE INTO organization_notification_reads VALUES(?,?)',
+                                           (org_id, payload['id']))
+                    result = {'success': True}
+        handler.send_json(200, result)
+    except sqlite3.IntegrityError:
+        handler.send_json(409, {'error': 'Ce destinataire existe déjà.'})
+    except (ValueError, TypeError):
+        handler.send_json(400, {'error': 'Paramètres invalides. Vérifiez les champs et OPENVIGIE_SECRET_KEY (32 caractères minimum).'})
+    except Exception:
+        handler.send_json(503, {'error': 'Service indisponible. Vérifiez la configuration SMTP, TLS et la clé de chiffrement.'})
+    return True
+
+
+def handle_legacy(handler, connect):
     parsed = urlparse(handler.path)
     path, method = parsed.path, handler.command
     routes = {
