@@ -1,7 +1,6 @@
-# OpenVIGIE 2027 — notes de version candidates
+# OpenVIGIE 2027 — notes de version
 
-> Statut : notes de version de la branche 2027. Vérifier les contrôles GitHub
-> et la mise à jour Docker avant publication.
+Version `v2027.0.0` — première release de la refonte 2027.
 
 ## Points forts
 
